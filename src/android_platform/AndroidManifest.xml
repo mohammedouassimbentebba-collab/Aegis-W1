@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  W1™ Aerospace & AI Defense: Android Security Manifest
+  File: src/android_platform/AndroidManifest.xml
+  Package: org.w1.defense
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.w1.defense">
+
+    <!-- Essential Android Permissions for Tactical C2 Telemetry -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Deny dangerous permissions by default (Zero Ambient Authority) -->
+    <!-- CAMERA, RECORD_AUDIO, ACCESS_FINE_LOCATION are NOT granted by default -->
+
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="W1 Defense Fortress"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <!-- Foreground Autonomous Monitoring Service -->
+        <service
+            android:name=".W1DefenseForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Aerospace tactical radar telemetry and on-device AI agent safety containment" />
+        </service>
+
+        <!-- Unexported Receiver: Prevents rogue external broadcast spoofing -->
+        <receiver
+            android:name=".W1BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

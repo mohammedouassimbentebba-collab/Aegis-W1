@@ -1,0 +1,3 @@
+# Kbuild for W1 VHF/UHF Anti-Stealth Radar
+obj-m += w1_vhf_radar.o
+w1_vhf_radar-y := w1_vhf_stealth_radar.o

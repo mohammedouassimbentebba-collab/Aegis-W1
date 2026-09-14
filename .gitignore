@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+build/
+dist/
+*.o
+*.ko
+*.mod
+*.mod.c
+*.order
+*.symvers
+*.dwo
+
+# Android NDK artifacts
+.cxx/
+*.apk
+*.aar
+
+# Environment & Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Logs & Temporary
+*.log
+npm-debug.log*
+yarn-debug.log*
+.tmp/
+temp_*/
+
+# OS Specific
+.DS_Store
+Thumbs.db

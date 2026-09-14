@@ -1,0 +1,36 @@
+{
+  "name": "w1-safety-fortress-dome",
+  "version": "1.0.0",
+  "description": "Aerospace-grade multi-domain defense fortress and cognitive dome for AI agents and LLM safety",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "simulate": "node simulation/battle_simulation.js",
+    "wargame": "node simulation/wargame_arena.js",
+    "radar-demo": "node simulation/anti_stealth_radar_demo.js",
+    "stress-audit": "node simulation/adversarial_stress_audit.js",
+    "swarm-attack": "node simulation/large_scale_multi_agent_swarm_attack.js",
+    "tent-demo": "node simulation/agent_work_tent_escape_demo.js",
+    "web-assault": "node simulation/complex_adversarial_web_assault.js",
+    "bench-escape": "node simulation/large_scale_agent_escape_benchmark.js",
+    "bench-testbed": "node simulation/ai_testbed_evaluation_benchmark.js",
+    "bench-linux": "node simulation/linux_kernel_sandbox_benchmark.js",
+    "bench-android": "node simulation/android_mobile_sandbox_benchmark.js",
+    "audit-cyber": "node simulation/comprehensive_cybersecurity_audit.js",
+    "start": "node src/index.js"
+  },
+  "keywords": [
+    "ai-safety",
+    "defense-in-depth",
+    "byzantine-fault-tolerance",
+    "formal-verification",
+    "do-178c",
+    "air-defense",
+    "latent-probing",
+    "mechanistic-interpretability",
+    "circuit-breaker"
+  ],
+  "author": "W1™ Safety Engineering",
+  "license": "Apache-2.0"
+}

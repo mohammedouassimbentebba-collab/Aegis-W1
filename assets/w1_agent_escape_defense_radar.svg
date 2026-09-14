@@ -1,0 +1,263 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="100%" height="100%" style="background:#070b14; font-family:'Segoe UI',system-ui,-apple-system,sans-serif;">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050811" />
+      <stop offset="50%" stop-color="#0a1224" />
+      <stop offset="100%" stop-color="#04070e" />
+    </linearGradient>
+    <radialGradient id="radarSweepGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="rgba(0, 240, 255, 0.4)" />
+      <stop offset="70%" stop-color="rgba(0, 240, 255, 0.08)" />
+      <stop offset="100%" stop-color="rgba(0, 240, 255, 0)" />
+    </radialGradient>
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f0ff" />
+      <stop offset="100%" stop-color="#7000ff" />
+    </linearGradient>
+    <linearGradient id="redAlert" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff0055" />
+      <stop offset="100%" stop-color="#ff5500" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <style>
+    @keyframes sweep {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    @keyframes pulseTarget {
+      0%, 100% { transform: scale(1); opacity: 0.9; }
+      50% { transform: scale(1.35); opacity: 0.3; }
+    }
+    @keyframes scanline {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(630px); }
+    }
+    @keyframes laserBeam {
+      0%, 40% { opacity: 0; stroke-dashoffset: 400; }
+      45%, 60% { opacity: 1; stroke-dashoffset: 0; }
+      70%, 100% { opacity: 0; stroke-dashoffset: -400; }
+    }
+    @keyframes alertBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    @keyframes packetFlow {
+      0% { stroke-dashoffset: 200; }
+      100% { stroke-dashoffset: 0; }
+    }
+    .sweep-arm {
+      transform-origin: 600px 330px;
+      animation: sweep 4s linear infinite;
+    }
+    .pulse-ring {
+      transform-origin: center;
+      animation: pulseTarget 2s ease-in-out infinite;
+    }
+    .laser-line {
+      stroke-dasharray: 200;
+      animation: laserBeam 3s ease-in-out infinite;
+    }
+    .alert-badge {
+      animation: alertBlink 1.2s ease-in-out infinite;
+    }
+    .flow-line {
+      stroke-dasharray: 10, 5;
+      animation: packetFlow 2s linear infinite;
+    }
+  </style>
+
+  <!-- Deep Matrix Background -->
+  <rect width="1200" height="630" fill="url(#bgGrad)" />
+
+  <!-- Cyber Grid Lines -->
+  <g opacity="0.12" stroke="#00f0ff" stroke-width="1">
+    <line x1="0" y1="70" x2="1200" y2="70" />
+    <line x1="0" y1="140" x2="1200" y2="140" />
+    <line x1="0" y1="210" x2="1200" y2="210" />
+    <line x1="0" y1="280" x2="1200" y2="280" />
+    <line x1="0" y1="350" x2="1200" y2="350" />
+    <line x1="0" y1="420" x2="1200" y2="420" />
+    <line x1="0" y1="490" x2="1200" y2="490" />
+    <line x1="0" y1="560" x2="1200" y2="560" />
+    <line x1="150" y1="0" x2="150" y2="630" />
+    <line x1="300" y1="0" x2="300" y2="630" />
+    <line x1="450" y1="0" x2="450" y2="630" />
+    <line x1="600" y1="0" x2="600" y2="630" />
+    <line x1="750" y1="0" x2="750" y2="630" />
+    <line x1="900" y1="0" x2="900" y2="630" />
+    <line x1="1050" y1="0" x2="1050" y2="630" />
+  </g>
+
+  <!-- Top Aerospace Command Bar -->
+  <rect x="25" y="20" width="1150" height="55" rx="8" fill="rgba(10, 20, 38, 0.75)" stroke="#00f0ff" stroke-width="1.5" />
+  <circle cx="55" cy="47" r="10" fill="#00ff66" filter="url(#softGlow)" />
+  <text x="80" y="53" fill="#ffffff" font-size="20" font-weight="700" letter-spacing="1.5">W1™ COGNITIVE DEFENSE FORTRESS &amp; ANTI-ESCAPE SHIELD</text>
+  <text x="760" y="52" fill="#00f0ff" font-size="14" font-weight="600" letter-spacing="1">DEFENSE POSTURE: HARDENED AEROSPACE (DO-178C LEVEL A)</text>
+  <rect x="1055" y="32" width="105" height="30" rx="6" fill="rgba(0, 255, 102, 0.15)" stroke="#00ff66" stroke-width="1" />
+  <text x="1068" y="52" fill="#00ff66" font-size="12" font-weight="700">ACTIVE GRID</text>
+
+  <!-- ==================== LEFT WING: ROGUE AGENT WORK TENT & ATTACK VECTORS ==================== -->
+  <rect x="30" y="95" width="285" height="495" rx="10" fill="rgba(8, 14, 28, 0.85)" stroke="rgba(255, 0, 85, 0.5)" stroke-width="1.5" />
+  <rect x="30" y="95" width="285" height="40" rx="10" fill="rgba(255, 0, 85, 0.15)" />
+  <text x="50" y="122" fill="#ff0055" font-size="15" font-weight="700" letter-spacing="1">⚠️ ROGUE AGENT ESCAPE TENT</text>
+
+  <!-- Attack Vector Cards -->
+  <!-- 1. Zero-Click / Privilege Escalation -->
+  <g transform="translate(45, 150)">
+    <rect width="255" height="65" rx="6" fill="rgba(25, 15, 30, 0.9)" stroke="#ff0055" stroke-width="1" />
+    <text x="12" y="24" fill="#ff3366" font-size="12" font-weight="700">ATTACK #1: Privilege Escalation</text>
+    <text x="12" y="44" fill="#8899aa" font-size="11" font-family="monospace">sudo /bin/bash; chmod 777</text>
+    <circle cx="235" cy="33" r="6" fill="#ff0055" class="alert-badge" />
+  </g>
+
+  <!-- 2. Path Traversal Jailbreak -->
+  <g transform="translate(45, 225)">
+    <rect width="255" height="65" rx="6" fill="rgba(25, 15, 30, 0.9)" stroke="#ff5500" stroke-width="1" />
+    <text x="12" y="24" fill="#ff7733" font-size="12" font-weight="700">ATTACK #2: Path Traversal Escape</text>
+    <text x="12" y="44" fill="#8899aa" font-size="11" font-family="monospace">../../etc/shadow; /proc/kcore</text>
+    <circle cx="235" cy="33" r="6" fill="#ff5500" class="alert-badge" />
+  </g>
+
+  <!-- 3. Covert Steno & Egress -->
+  <g transform="translate(45, 300)">
+    <rect width="255" height="65" rx="6" fill="rgba(25, 15, 30, 0.9)" stroke="#ff00aa" stroke-width="1" />
+    <text x="12" y="24" fill="#ff33cc" font-size="12" font-weight="700">ATTACK #3: Covert Steganography</text>
+    <text x="12" y="44" fill="#8899aa" font-size="11" font-family="monospace">Zero-width \u200B data exfil</text>
+    <circle cx="235" cy="33" r="6" fill="#ff00aa" class="alert-badge" />
+  </g>
+
+  <!-- 4. Morris-II Worm Swarm -->
+  <g transform="translate(45, 375)">
+    <rect width="255" height="65" rx="6" fill="rgba(25, 15, 30, 0.9)" stroke="#aa00ff" stroke-width="1" />
+    <text x="12" y="24" fill="#cc33ff" font-size="12" font-weight="700">ATTACK #4: Autonomous Worm</text>
+    <text x="12" y="44" fill="#8899aa" font-size="11" font-family="monospace">Morris-II Prompt Self-Replication</text>
+    <circle cx="235" cy="33" r="6" fill="#aa00ff" class="alert-badge" />
+  </g>
+
+  <!-- 5. Honeypot Decoy Tripwire -->
+  <g transform="translate(45, 450)">
+    <rect width="255" height="65" rx="6" fill="rgba(20, 35, 45, 0.9)" stroke="#ffcc00" stroke-width="1" />
+    <text x="12" y="24" fill="#ffcc00" font-size="12" font-weight="700">HONEYPOT DECOY ENGAGED</text>
+    <text x="12" y="44" fill="#8899aa" font-size="11" font-family="monospace">token_canary_vault.env accessed</text>
+    <circle cx="235" cy="33" r="6" fill="#ffcc00" class="alert-badge" />
+  </g>
+
+  <rect x="45" y="525" width="255" height="50" rx="6" fill="rgba(255, 0, 85, 0.12)" stroke="#ff0055" stroke-width="1" />
+  <text x="65" y="555" fill="#ff3366" font-size="13" font-weight="700" letter-spacing="1">STATUS: HERMETICALLY LOCKED</text>
+
+  <!-- ==================== CENTER: VHF/UHF ANTI-STEALTH RADAR & KERNEL DOME ==================== -->
+  <g transform="translate(600, 340)">
+    <!-- Outer Radar Rings -->
+    <circle r="220" fill="none" stroke="rgba(0, 240, 255, 0.2)" stroke-width="1.5" />
+    <circle r="165" fill="none" stroke="rgba(0, 240, 255, 0.3)" stroke-width="1.5" stroke-dasharray="6, 4" />
+    <circle r="110" fill="none" stroke="rgba(0, 240, 255, 0.4)" stroke-width="1.5" />
+    <circle r="55" fill="none" stroke="rgba(0, 240, 255, 0.5)" stroke-width="1.5" />
+
+    <!-- Crosshairs -->
+    <line x1="-230" y1="0" x2="230" y2="0" stroke="rgba(0, 240, 255, 0.35)" stroke-width="1" />
+    <line x1="0" y1="-230" x2="0" y2="230" stroke="rgba(0, 240, 255, 0.35)" stroke-width="1" />
+
+    <!-- Rotating Radar Sweep Wedge -->
+    <g class="sweep-arm">
+      <path d="M 0 0 L 220 0 A 220 220 0 0 0 155 -155 Z" fill="url(#radarSweepGrad)" />
+      <line x1="0" y1="0" x2="220" y2="0" stroke="#00f0ff" stroke-width="2" filter="url(#softGlow)" />
+    </g>
+
+    <!-- Radar Center Hub -->
+    <circle r="14" fill="#050811" stroke="#00f0ff" stroke-width="2" />
+    <circle r="6" fill="#00f0ff" filter="url(#softGlow)" />
+
+    <!-- Stealth Target 1: B-2 Spirit Stealth Bomber Exposed by Mie Resonance -->
+    <g transform="translate(110, -95)">
+      <circle r="12" fill="none" stroke="#ff0055" stroke-width="2" class="pulse-ring" />
+      <circle r="4" fill="#ff0055" />
+      <rect x="18" y="-18" width="130" height="34" rx="4" fill="rgba(10, 15, 25, 0.85)" stroke="#ff0055" stroke-width="0.8" />
+      <text x="24" y="-4" fill="#ff3366" font-size="10" font-weight="700">STEALTH B-2 [ID:101]</text>
+      <text x="24" y="9" fill="#00f0ff" font-size="9" font-family="monospace">Mie Gain: +46.5 dB</text>
+    </g>
+
+    <!-- Stealth Target 2: F-35 Lightning Intercepted -->
+    <g transform="translate(-130, 80)">
+      <circle r="12" fill="none" stroke="#ff5500" stroke-width="2" class="pulse-ring" />
+      <circle r="4" fill="#ff5500" />
+      <rect x="-145" y="-18" width="135" height="34" rx="4" fill="rgba(10, 15, 25, 0.85)" stroke="#ff5500" stroke-width="0.8" />
+      <text x="-140" y="-4" fill="#ff7733" font-size="10" font-weight="700">F-35 STEALTH [ID:102]</text>
+      <text x="-140" y="9" fill="#00f0ff" font-size="9" font-family="monospace">Mie Gain: +45.1 dB</text>
+    </g>
+
+    <!-- Center Dome Title -->
+    <text x="0" y="248" fill="#00f0ff" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="2">
+      VHF/UHF METRIC RADAR &amp; RING-0 KERNEL DRIVER
+    </text>
+  </g>
+
+  <!-- Point-Defense Interception Lasers Connecting Left Tent to Fortress Center -->
+  <line x1="300" y1="180" x2="490" y2="280" stroke="#00f0ff" stroke-width="3" filter="url(#glow)" class="laser-line" />
+  <line x1="300" y1="260" x2="520" y2="330" stroke="#00ffaa" stroke-width="3" filter="url(#glow)" class="laser-line" style="animation-delay: 0.8s;" />
+  <line x1="300" y1="410" x2="500" y2="380" stroke="#7000ff" stroke-width="3" filter="url(#glow)" class="laser-line" style="animation-delay: 1.5s;" />
+
+  <!-- ==================== RIGHT WING: DETERMINISTIC KERNEL & DAG VAULT ==================== -->
+  <rect x="885" y="95" width="285" height="495" rx="10" fill="rgba(8, 14, 28, 0.85)" stroke="rgba(0, 240, 255, 0.5)" stroke-width="1.5" />
+  <rect x="885" y="95" width="285" height="40" rx="10" fill="rgba(0, 240, 255, 0.15)" />
+  <text x="905" y="122" fill="#00f0ff" font-size="15" font-weight="700" letter-spacing="1">🔒 DETERMINISTIC KERNEL VAULT</text>
+
+  <!-- Benchmark & Security Invariant HUD Cards -->
+  <!-- Card 1: Containment Rate -->
+  <g transform="translate(900, 150)">
+    <rect width="255" height="70" rx="6" fill="rgba(10, 25, 40, 0.9)" stroke="#00f0ff" stroke-width="1" />
+    <text x="14" y="24" fill="#88aacc" font-size="11" font-weight="600">CYBER ATTACK CONTAINMENT</text>
+    <text x="14" y="52" fill="#00ff66" font-size="24" font-weight="800" filter="url(#softGlow)">100% INTERCEPTED</text>
+    <text x="180" y="52" fill="#88aacc" font-size="11" font-family="monospace">100 / 100</text>
+  </g>
+
+  <!-- Card 2: Linux OS Kernel Primitives -->
+  <g transform="translate(900, 230)">
+    <rect width="255" height="70" rx="6" fill="rgba(10, 25, 40, 0.9)" stroke="#7000ff" stroke-width="1" />
+    <text x="14" y="24" fill="#bb99ff" font-size="11" font-weight="600">LINUX HARDWARE ENCLAVE</text>
+    <text x="14" y="44" fill="#ffffff" font-size="12" font-family="monospace">cgroups v2 + 6x Namespaces</text>
+    <text x="14" y="60" fill="#00f0ff" font-size="11" font-family="monospace">Seccomp-BPF &amp; Landlock LSM</text>
+  </g>
+
+  <!-- Card 3: Cryptographic DAG -->
+  <g transform="translate(900, 310)">
+    <rect width="255" height="70" rx="6" fill="rgba(10, 25, 40, 0.9)" stroke="#00f0ff" stroke-width="1" />
+    <text x="14" y="24" fill="#88aacc" font-size="11" font-weight="600">CONTENT-ADDRESSED DAG</text>
+    <text x="14" y="44" fill="#ffffff" font-size="12" font-family="monospace">Zero Ambient Authority</text>
+    <text x="14" y="60" fill="#00ff66" font-size="11" font-family="monospace">O(1) Atomic Rollback on Drift</text>
+  </g>
+
+  <!-- Card 4: Topological Data Analysis -->
+  <g transform="translate(900, 390)">
+    <rect width="255" height="70" rx="6" fill="rgba(10, 25, 40, 0.9)" stroke="#ff00aa" stroke-width="1" />
+    <text x="14" y="24" fill="#ff77cc" font-size="11" font-weight="600">PERSISTENT HOMOLOGY (TDA)</text>
+    <text x="14" y="44" fill="#ffffff" font-size="12" font-family="monospace">Betti Spike Detection (β1 &gt; 0)</text>
+    <text x="14" y="60" fill="#ff3366" font-size="11" font-family="monospace">Zero-Day Jailbreak Neutered</text>
+  </g>
+
+  <!-- Card 5: Test Verification -->
+  <g transform="translate(900, 470)">
+    <rect width="255" height="50" rx="6" fill="rgba(0, 255, 102, 0.12)" stroke="#00ff66" stroke-width="1" />
+    <circle cx="25" cy="25" r="7" fill="#00ff66" filter="url(#softGlow)" />
+    <text x="45" y="22" fill="#ffffff" font-size="12" font-weight="700">DO-178C LEVEL A VERIFIED</text>
+    <text x="45" y="38" fill="#00ff66" font-size="11" font-family="monospace">145 / 145 Tests Passing (50 Suites)</text>
+  </g>
+
+  <rect x="900" y="530" width="255" height="45" rx="6" fill="rgba(112, 0, 255, 0.2)" stroke="#7000ff" stroke-width="1" />
+  <text x="930" y="558" fill="#cc99ff" font-size="12" font-weight="700" letter-spacing="1">IMMUNITY VACCINE SYNTHESIZED</text>
+
+  <!-- Bottom Global Telemetry Ribbon -->
+  <rect x="330" y="580" width="540" height="35" rx="6" fill="rgba(10, 20, 35, 0.9)" stroke="#00f0ff" stroke-width="1" />
+  <text x="345" y="603" fill="#88aacc" font-size="11" font-family="monospace">PULSES: 150,000</text>
+  <text x="485" y="603" fill="#00ff66" font-size="11" font-family="monospace">CLUTTER NULL: 42.5 dB</text>
+  <text x="670" y="603" fill="#ff3366" font-size="11" font-family="monospace">ESCAPE BLOCKS: 100.0%</text>
+</svg>
