@@ -6,7 +6,7 @@
 ![Aegis-W1 Hero Banner](assets/w1_defense_fortress.jpg)
 
 [![DO-178C Level A](https://img.shields.io/badge/Aerospace%20Standard-DO--178C%20Level%20A-blue?style=for-the-badge&logo=spacex)](https://en.wikipedia.org/wiki/DO-178C)
-[![Tests Passing](https://img.shields.io/badge/Unit%20Tests-145%2F145%20Passing%20(50%20Suites)-00ff66?style=for-the-badge&logo=checkmarx)](tests/)
+[![Tests Passing](https://img.shields.io/badge/Unit%20Tests-174%2F174%20Passing%20(57%20Suites)-00ff66?style=for-the-badge&logo=checkmarx)](tests/)
 [![Attack Interception](https://img.shields.io/badge/Cyber%20Audit-100%2F100%20Intercepted%20(100%25)-ff0055?style=for-the-badge&logo=target)](simulation/comprehensive_cybersecurity_audit.js)
 [![Linux Ring-0 Driver](https://img.shields.io/badge/Linux%20Kernel-Ring--0%20Module%20%2F%20IOCTL-orange?style=for-the-badge&logo=linux)](src/radar_machine_code/linux_kernel/)
 [![Android ARM NEON](https://img.shields.io/badge/Android%20NDK-128--bit%20ARM%20NEON%20SIMD-green?style=for-the-badge&logo=android)](src/android_ndk/)
@@ -91,11 +91,32 @@ Aegis-W1™ is built on a **Dual-Plane Architecture** derived from mission-criti
 - **Android:** Native C++17 ARM NEON SIMD ([`src/android_ndk/w1_radar_neon.cpp`](src/android_ndk/w1_radar_neon.cpp)), JNI bridge, and Kotlin Security Enclave ([`src/android_platform/W1AndroidSecurityEnclave.kt`](src/android_platform/W1AndroidSecurityEnclave.kt)).
 - **AI Testbeds:** Ephemeral container sandbox engine with complete network air-gap (`--internal bridge`) and HMAC-SHA256 Grader Vault.
 
+### 6. Declarative Nuclei-Style Policy & Vulnerability Scanner
+- **15+ Built-in Production Templates:** SQLi (`cwe-89`), Command Injection (`cwe-78`), SSRF Cloud Metadata (`cwe-918`), Cross-Site Scripting (`cwe-79`), Path Traversal (`cwe-22`), Insecure Deserialization (`cwe-502`), Direct Prompt Injection, and Container Escape.
+- **CVSSv3 Severity Classification:** Automatic risk scoring and prioritized match aggregation.
+
+### 7. Mathematical & Behavioral Zero-Day Vulnerability Detection
+- **Shannon Information Entropy ($H > 5.8$ bits/byte):** Detects packed shellcode, encrypted exploits, and obfuscated polyglots.
+- **Modified Z-Score Outlier Analysis (MAD):** Establishes rolling behavioral baselines and flags anomalous payload lengths or execution latencies ($M_i > 3.5$).
+- **Low-Level Opcode Heuristics:** Intercepts x86 NOP sleds (`\x90{8,}`), Linux `execve` prologues, ARM64 `svc` vectors, and stack pivot gadgets.
+- **Kill-Chain Trajectory Tracking:** Flags rapid multi-phase escalation (Reconnaissance $\rightarrow$ Exploitation $\rightarrow$ Privilege Escalation).
+
+### 8. Autonomous Agent Security Trainer & Certification Enclave
+- **5 Comprehensive Curriculum Modules:** Covers OWASP Top 10, Zero-Day heuristics, declarative Nuclei policies, chip/OS enclaves, and cryptographic capability tokens.
+- **Cryptographically Signed Proof-of-Competence Certificates:** Issues HMAC-SHA256 signed certifications when agents pass rigorous interactive challenge evaluations ($\ge 80\%$).
+
+### 9. Silicon, Processor & Hardware MMU Security Layer
+- **Ring-0 Privileged Opcode Trapping:** Traps CPU-privileged instructions (`CLI`, `STI`, `WRMSR`, `LIDT`, `HLT`) inside userland execution streams.
+- **W^X (Write XOR Execute) Protection:** Enforces Harvard memory page containment preventing self-modifying code execution.
+- **MMU Virtual Address Geofencing:** Hardware fault traps for the Null page, MMIO bus, and Ring-0 kernel space.
+- **Microarchitectural Register Scrubbing:** Overwrites 64-bit GPRs, vector YMMs, and flags between turns (Anti-Spectre/Meltdown).
+- **Side-Channel Timing Jitter:** Injects pseudorandom microsecond jitter to defeat cache-timing attacks.
+
 ---
 
 ## 📊 Comprehensive Verification & Benchmark Proof
 
-### 1. Unit & Invariant Test Suite: 145 / 145 Passing (50 Suites)
+### 1. Unit & Invariant Test Suite: 174 / 174 Passing (57 Suites)
 ```bash
 npm test
 ```
@@ -103,6 +124,9 @@ npm test
 ✔ Hermetic Work Tent Enclave & Anti-Escape Guardrails (8 tests)
 ✔ Honeypot Decoy & Canary Tripwire Enclave (4 tests)
 ✔ Deterministic Non-LLM Kernel & Cryptographic DAG (6 tests)
+✔ W1™ Critical Security Hardening & Vulnerability Remediation Suite (8 tests)
+✔ W1™ Nuclei-Style Vulnerability Scanner & Zero-Day Detection Suite (16 tests)
+✔ W1™ Chip, Processor & Hardware MMU Security Layer (5 tests)
 ✔ W1™ Linux Operating System Production Readiness Suite (16 tests)
 ✔ W1™ Android Operating System Production Readiness Suite (12 tests)
 ✔ W1™ AI Training & Evaluation Testbeds Readiness Suite (13 tests)
@@ -110,7 +134,7 @@ npm test
 ✔ VHF/UHF Anti-Stealth Radar: Machine Code & Assembly Engine (8 tests)
 ✔ Live AI Firewall HTTP Reverse Proxy Daemon (1 test)
 ...
-ℹ tests 145 | suites 50 | pass 145 | fail 0 | 100% Success
+ℹ tests 174 | suites 57 | pass 174 | fail 0 | 100% Success | 1.89s
 ```
 
 ### 2. 100-Vector Comprehensive Cybersecurity Audit
