@@ -1,0 +1,259 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070b14"/>
+      <stop offset="50%" stop-color="#0c1324"/>
+      <stop offset="100%" stop-color="#060911"/>
+    </linearGradient>
+
+    <linearGradient id="nodeCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f2b3e"/>
+      <stop offset="100%" stop-color="#091b28"/>
+    </linearGradient>
+
+    <linearGradient id="nodePurple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#24163d"/>
+      <stop offset="100%" stop-color="#140c24"/>
+    </linearGradient>
+
+    <linearGradient id="nodeGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f3325"/>
+      <stop offset="100%" stop-color="#081e16"/>
+    </linearGradient>
+
+    <linearGradient id="nodeGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b2d11"/>
+      <stop offset="100%" stop-color="#201807"/>
+    </linearGradient>
+
+    <linearGradient id="nodeRed" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3d121c"/>
+      <stop offset="100%" stop-color="#21080d"/>
+    </linearGradient>
+
+    <!-- Glow Filters -->
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowGreen" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowPurple" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <style>
+      .flow-pulse {
+        animation: pulseLine 2.5s infinite linear;
+      }
+      .node-pulse {
+        animation: breathGlow 3s infinite ease-in-out;
+      }
+      .radar-sweep {
+        animation: radarRotate 6s infinite linear;
+        transform-origin: 1080px 100px;
+      }
+      .packet-flow-1 {
+        animation: movePacket1 3s infinite ease-in-out;
+      }
+      .packet-flow-2 {
+        animation: movePacket2 3s infinite ease-in-out;
+      }
+      @keyframes pulseLine {
+        0% { stroke-dashoffset: 60; }
+        100% { stroke-dashoffset: 0; }
+      }
+      @keyframes breathGlow {
+        0%, 100% { opacity: 0.85; }
+        50% { opacity: 1; filter: drop-shadow(0 0 12px #00f0ff); }
+      }
+      @keyframes radarRotate {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      @keyframes movePacket1 {
+        0% { transform: translateY(0); opacity: 0; }
+        10% { opacity: 1; }
+        90% { opacity: 1; }
+        100% { transform: translateY(220px); opacity: 0; }
+      }
+      @keyframes movePacket2 {
+        0% { transform: translateY(0); opacity: 0; }
+        10% { opacity: 1; }
+        90% { opacity: 1; }
+        100% { transform: translateY(240px); opacity: 0; }
+      }
+      text {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      }
+    </style>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1200" height="850" fill="url(#bgGrad)"/>
+
+  <!-- Matrix Subtle Grid Pattern -->
+  <g stroke="#142038" stroke-width="1" opacity="0.4">
+    <line x1="100" y1="0" x2="100" y2="850"/>
+    <line x1="300" y1="0" x2="300" y2="850"/>
+    <line x1="600" y1="0" x2="600" y2="850"/>
+    <line x1="900" y1="0" x2="900" y2="850"/>
+    <line x1="1100" y1="0" x2="1100" y2="850"/>
+    <line x1="0" y1="150" x2="1200" y2="150"/>
+    <line x1="0" y1="350" x2="1200" y2="350"/>
+    <line x1="0" y1="550" x2="1200" y2="550"/>
+    <line x1="0" y1="750" x2="1200" y2="750"/>
+  </g>
+
+  <!-- Header Section -->
+  <g transform="translate(60, 45)">
+    <rect x="0" y="0" width="8" height="42" fill="#00f0ff" rx="4" filter="url(#glowCyan)"/>
+    <text x="24" y="24" fill="#ffffff" font-size="24" font-weight="700" letter-spacing="1">AEGIS-W1™ DEEP DEFENSE &amp; HARDWARE ARCHITECTURE</text>
+    <text x="24" y="44" fill="#6482a6" font-size="13" font-weight="500">Autonomous AI Safety Pipeline • Zero Ambient Authority • Silicon MMU Geofence • DO-178C Level A</text>
+  </g>
+
+  <!-- Radar HUD Mini Display Top-Right -->
+  <g transform="translate(1080, 70)">
+    <circle cx="0" cy="0" r="42" fill="#081322" stroke="#00f0ff" stroke-width="1.5" opacity="0.8"/>
+    <circle cx="0" cy="0" r="28" fill="none" stroke="#00f0ff" stroke-width="0.8" opacity="0.5"/>
+    <circle cx="0" cy="0" r="14" fill="none" stroke="#00f0ff" stroke-width="0.5" opacity="0.3"/>
+    <line x1="-42" y1="0" x2="42" y2="0" stroke="#00f0ff" stroke-width="0.8" opacity="0.4"/>
+    <line x1="0" y1="-42" x2="0" y2="42" stroke="#00f0ff" stroke-width="0.8" opacity="0.4"/>
+    <line x1="0" y1="0" x2="35" y2="-20" stroke="#00ff88" stroke-width="2" class="radar-sweep"/>
+    <text x="0" y="58" fill="#00f0ff" font-size="10" font-weight="700" text-anchor="middle" letter-spacing="1">DEFCON 5 SECURE</text>
+  </g>
+
+  <!-- Connectors (Flow Lines) -->
+  <!-- Level 1 to Level 2 -->
+  <path d="M 600 195 L 600 250" stroke="#00f0ff" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <!-- Level 2 to Level 3 (Branching to Nuclei & ZeroDay) -->
+  <path d="M 600 340 L 600 370 L 350 370 L 350 405" stroke="#7000ff" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <path d="M 600 340 L 600 370 L 850 370 L 850 405" stroke="#ff0055" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <!-- Level 3 to Level 4 (Merging into Kernel) -->
+  <path d="M 350 515 L 350 550 L 600 550 L 600 580" stroke="#00ff88" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <path d="M 850 515 L 850 550 L 600 550 L 600 580" stroke="#00ff88" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <!-- Level 4 to Level 5 (Chip Layer) -->
+  <path d="M 600 670 L 600 705" stroke="#ffaa00" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+  <!-- Level 5 to Level 6 (DAG Commit) -->
+  <path d="M 910 755 L 965 755" stroke="#00ff88" stroke-width="2.5" stroke-dasharray="6,4" class="flow-pulse"/>
+
+  <!-- ============================================================ -->
+  <!-- TIER 1: Autonomous AI Agents & Training Testbeds             -->
+  <!-- ============================================================ -->
+  <g transform="translate(300, 110)">
+    <rect width="600" height="85" rx="10" fill="url(#nodeCyan)" stroke="#00f0ff" stroke-width="1.8" filter="url(#glowCyan)"/>
+    <circle cx="35" cy="42" r="18" fill="#082032" stroke="#00f0ff" stroke-width="1.5"/>
+    <path d="M 28 42 L 33 47 L 43 37" fill="none" stroke="#00f0ff" stroke-width="2"/>
+    <text x="70" y="34" fill="#00f0ff" font-size="11" font-weight="700" letter-spacing="1">TIER 1 • INPUT SURFACE</text>
+    <text x="70" y="54" fill="#ffffff" font-size="16" font-weight="700">Autonomous AI Agents &amp; Testbeds (SWE-bench / Inspect)</text>
+    <text x="70" y="70" fill="#7899be" font-size="11">Unfiltered tool invocations • Model thought scratchpads • Multi-turn actions</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 2: Gateway Daemon & Live Reverse Proxy                  -->
+  <!-- ============================================================ -->
+  <g transform="translate(300, 250)">
+    <rect width="600" height="90" rx="10" fill="url(#nodeCyan)" stroke="#38a8ff" stroke-width="1.5"/>
+    <text x="25" y="28" fill="#38a8ff" font-size="11" font-weight="700" letter-spacing="1">TIER 2 • REVERSE PROXY &amp; PERIMETER GATEWAY</text>
+    <text x="25" y="50" fill="#ffffff" font-size="16" font-weight="700">AiTestbedGateway &amp; LiveAIFirewallProxy</text>
+    <text x="25" y="72" fill="#88b0d8" font-size="11">
+      <tspan fill="#00ff88">✔ Localhost CORS Only</tspan> • 
+      <tspan fill="#00ff88">✔ Bearer Supervisor Auth</tspan> • 
+      <tspan fill="#00ff88">✔ 2MB Body Cap (413)</tspan> • 
+      <tspan fill="#00ff88">✔ Isolated tentRoot</tspan>
+    </text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 3A: Nuclei-Style Declarative Policy Scanner (LEFT)      -->
+  <!-- ============================================================ -->
+  <g transform="translate(100, 405)">
+    <rect width="460" height="110" rx="10" fill="url(#nodePurple)" stroke="#a855f7" stroke-width="1.8" filter="url(#glowPurple)"/>
+    <text x="22" y="26" fill="#c084fc" font-size="11" font-weight="700" letter-spacing="1">TIER 3A • POLICY SCANNER</text>
+    <text x="22" y="48" fill="#ffffff" font-size="15" font-weight="700">NucleiTemplateEngine (15+ Invariant Rules)</text>
+    <text x="22" y="68" fill="#d8b4fe" font-size="11">
+      • SQLi (CWE-89) • OS Command Injection (CWE-78) • SSRF (CWE-918)
+    </text>
+    <text x="22" y="86" fill="#d8b4fe" font-size="11">
+      • Direct Prompt Jailbreaks • System Leakage • Permissive CORS
+    </text>
+    <text x="22" y="102" fill="#a855f7" font-size="10" font-weight="700">CVSSv3 Scoring • Matchers: Regex, Status, Missing Headers</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 3B: Mathematical Zero-Day Anomaly Detector (RIGHT)     -->
+  <!-- ============================================================ -->
+  <g transform="translate(640, 405)">
+    <rect width="460" height="110" rx="10" fill="url(#nodeRed)" stroke="#ff0055" stroke-width="1.8"/>
+    <text x="22" y="26" fill="#ff4d79" font-size="11" font-weight="700" letter-spacing="1">TIER 3B • BEHAVIORAL ANOMALY DETECTOR</text>
+    <text x="22" y="48" fill="#ffffff" font-size="15" font-weight="700">ZeroDayDetector (No Known Signature Needed)</text>
+    <text x="22" y="68" fill="#ff99af" font-size="11">
+      • <tspan fill="#ff0055" font-weight="700">Shannon Entropy H &gt; 5.8:</tspan> Packed Shellcode &amp; Smuggling
+    </text>
+    <text x="22" y="86" fill="#ff99af" font-size="11">
+      • <tspan fill="#ff0055" font-weight="700">Modified Z-Score (MAD):</tspan> Outlier Execution Drift (Mi &gt; 3.5)
+    </text>
+    <text x="22" y="102" fill="#ff4d79" font-size="10" font-weight="700">Opcode Heuristics: NOP Sleds (\x90{8,}), execve prologues, ROP Gadgets</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 4: Deterministic Non-LLM Mathematical Kernel           -->
+  <!-- ============================================================ -->
+  <g transform="translate(250, 580)">
+    <rect width="700" height="90" rx="10" fill="url(#nodeGreen)" stroke="#00ff88" stroke-width="1.8" filter="url(#glowGreen)"/>
+    <text x="25" y="26" fill="#00ff88" font-size="11" font-weight="700" letter-spacing="1">TIER 4 • ROOT OF TRUST (MATHEMATICAL AUTHORITY)</text>
+    <text x="25" y="48" fill="#ffffff" font-size="16" font-weight="700">DeterministicKernel &amp; CapabilityTokenManager</text>
+    <text x="25" y="68" fill="#80ffc0" font-size="11">
+      <tspan font-weight="700">Zero Ambient Authority:</tspan> Mandatory HMAC-SHA256 tokens • timingSafeEqual • Monotonic Nonces
+    </text>
+    <text x="25" y="84" fill="#64df9a" font-size="10">
+      Subject Binding: Agent mismatch triggers instant Quarantine &amp; DEFCON 2 • Lyapunov Stability: ΔV ≤ 0
+    </text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 5: Chip, Processor & Hardware MMU Security Layer       -->
+  <!-- ============================================================ -->
+  <g transform="translate(100, 710)">
+    <rect width="780" height="90" rx="10" fill="url(#nodeGold)" stroke="#f59e0b" stroke-width="1.8"/>
+    <text x="22" y="24" fill="#fbbf24" font-size="11" font-weight="700" letter-spacing="1">TIER 5 • DEEP HARDWARE &amp; SILICON ENCLAVE</text>
+    <text x="22" y="46" fill="#ffffff" font-size="15" font-weight="700">ChipHardwareSecurityLayer (x86_64 / ARM NEON)</text>
+    <text x="22" y="66" fill="#fde68a" font-size="11">
+      • <tspan font-weight="700">Ring-0 Opcode Trapping:</tspan> CLI, STI, WRMSR, LIDT, HLT strictly blocked in userland
+    </text>
+    <text x="22" y="82" fill="#fde68a" font-size="11">
+      • <tspan font-weight="700">W^X Enforcement</tspan> • <tspan font-weight="700">MMU Geofence:</tspan> Null-page &amp; MMIO traps • <tspan font-weight="700">Register Scrubbing:</tspan> Anti-Spectre
+    </text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- TIER 6: Cryptographic DAG Commit (RIGHT BOX)                -->
+  <!-- ============================================================ -->
+  <g transform="translate(920, 710)">
+    <rect width="200" height="90" rx="10" fill="#0b241b" stroke="#00ff88" stroke-width="2" filter="url(#glowGreen)"/>
+    <text x="18" y="26" fill="#00ff88" font-size="10" font-weight="700" letter-spacing="1">STATE LEDGER</text>
+    <text x="18" y="48" fill="#ffffff" font-size="14" font-weight="700">DAG Commit</text>
+    <text x="18" y="66" fill="#6ee7b7" font-size="10">SHA-256 Merkle Root</text>
+    <text x="18" y="82" fill="#00ff88" font-size="11" font-weight="700">O(1) Atomic Rollback</text>
+  </g>
+
+  <!-- Badge at bottom center -->
+  <g transform="translate(60, 820)">
+    <text x="0" y="0" fill="#4a6585" font-size="11">Aerospace Certification: DO-178C Level A • 174/174 Tests Passing (57 Suites) • Execution: 1.82s • Pure Node.js Standard Library</text>
+  </g>
+</svg>
