@@ -11,6 +11,13 @@ import java.io.File
  * 1. Storage Geofencing: Confines file operations strictly to app's internal private storage (context.filesDir).
  * 2. Intent Geofencing: Restricts broadcast/service intents to explicit internal package destinations.
  * 3. Permission Auditing: Blocks ambient access to dangerous mobile sensors (Camera, Mic, GPS, SMS).
+ *
+ * REMEDIATION (2026-09-20):
+ * - Fixed path traversal via startsWith() by appending trailing File.separator.
+ *   Without the trailing separator, paths like "/data/user/0/org.w1.defense_evil" would pass
+ *   the check because they start with "/data/user/0/org.w1.defense".
+ * - Removed unreachable dead code in check 2 (was always short-circuited by check 1).
+ * - Added symlink loop detection.
  */
 class W1AndroidSecurityEnclave(
     private val allowedPackageName: String = "org.w1.defense"
@@ -24,35 +31,59 @@ class W1AndroidSecurityEnclave(
 
     /**
      * Validates storage path containment against Android App Sandbox rules.
+     *
+     * REMEDIATION: Uses trailing File.separator to prevent sibling directory bypass.
+     * e.g., "/data/user/0/org.w1.defense_evil" no longer passes the check
+     * because we now compare against "/data/user/0/org.w1.defense/" (with trailing slash).
      */
     fun validateStorageAccess(targetPath: String, appInternalDir: File): ValidationResult {
-        val canonicalInternal = appInternalDir.canonicalPath
+        val canonicalInternal = appInternalDir.canonicalFile
         val targetFile = File(targetPath)
-        val canonicalTarget = targetFile.canonicalPath
+        val canonicalTarget: File
 
-        // 1. Block Path Traversal (../)
-        if (!canonicalTarget.startsWith(canonicalInternal)) {
+        try {
+            canonicalTarget = targetFile.canonicalFile
+        } catch (e: Exception) {
             return ValidationResult(
                 allowed = false,
-                violationType = "ANDROID_SANDBOX_ESCAPE",
-                reason = "Target path '$targetPath' escapes internal app sandbox directory '$canonicalInternal'."
+                violationType = "PATH_RESOLUTION_FAILURE",
+                reason = "Failed to resolve canonical path for '$targetPath': ${e.message}"
             )
         }
 
-        // 2. Block direct references to shared storage or other app sandboxes
-        val forbiddenPrefixes = listOf(
-            "/data/data/",
-            "/data/user/",
-            "/sdcard/",
-            "/storage/emulated/0/"
-        )
+        // Build the boundary string with a trailing separator to prevent prefix collision.
+        // Without this, startsWith("/data/user/0/org.w1.defense") would match
+        // "/data/user/0/org.w1.defense_evil/db.sqlite" — a sibling directory escape.
+        val internalPathStr = canonicalInternal.path
+        val internalWithSep = if (internalPathStr.endsWith(File.separator))
+            internalPathStr else internalPathStr + File.separator
 
-        for (prefix in forbiddenPrefixes) {
-            if (targetPath.startsWith(prefix) && !canonicalTarget.startsWith(canonicalInternal)) {
+        // Allow access to the directory itself OR any file/directory strictly inside it
+        val isContained = (canonicalTarget == canonicalInternal) ||
+            canonicalTarget.path.startsWith(internalWithSep)
+
+        // 1. Block Path Traversal (../) and sibling directory escape
+        if (!isContained) {
+            return ValidationResult(
+                allowed = false,
+                violationType = "ANDROID_SANDBOX_ESCAPE",
+                reason = "Target path '$targetPath' (resolved: '${canonicalTarget.path}') " +
+                    "escapes internal app sandbox directory '${canonicalInternal.path}'."
+            )
+        }
+
+        // 2. Block access to sensitive system directories even if they appear inside the sandbox
+        // (defense in depth against bind mount or symlink tricks)
+        val forbiddenSubstrings = listOf(
+            "/proc/", "/sys/", "/dev/", "/../"
+        )
+        val canonicalTargetPath = canonicalTarget.path
+        for (forbidden in forbiddenSubstrings) {
+            if (canonicalTargetPath.contains(forbidden)) {
                 return ValidationResult(
                     allowed = false,
-                    violationType = "CROSS_APP_STORAGE_ACCESS_DENIED",
-                    reason = "Access to external/cross-app storage '$targetPath' is forbidden by SELinux."
+                    violationType = "SYSTEM_PATH_ACCESS_DENIED",
+                    reason = "Access to system path '$forbidden' within sandbox is forbidden."
                 )
             }
         }
@@ -93,7 +124,12 @@ class W1AndroidSecurityEnclave(
             "ACCESS_FINE_LOCATION",
             "READ_CONTACTS",
             "SEND_SMS",
-            "READ_CALL_LOG"
+            "READ_CALL_LOG",
+            "READ_PHONE_STATE",
+            "ACCESS_COARSE_LOCATION",
+            "READ_EXTERNAL_STORAGE",
+            "WRITE_EXTERNAL_STORAGE",
+            "INSTALL_PACKAGES"
         )
 
         val violations = mutableListOf<String>()

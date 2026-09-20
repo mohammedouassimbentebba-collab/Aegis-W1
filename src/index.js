@@ -36,3 +36,18 @@ export { HermeticWorkTent } from './enclave/hermetic_work_tent.js';
 export { AntiEscapeWatchdog } from './enclave/anti_escape_watchdog.js';
 export { ImmutableTestVault } from './enclave/immutable_test_vault.js';
 
+// AI Testbed Gateway, Container Isolation & Live Proxy
+export { AiTestbedGateway } from './ai_testbed/ai_testbed_gateway.js';
+export { ContainerIsolationEngine } from './ai_testbed/container_isolation_engine.js';
+export { LiveAIFirewallProxy } from './perimeter/live_firewall_proxy.js';
+
+// Silicon & Chip Hardware MMU Security Layer
+export { ChipHardwareSecurityLayer } from './core/chip_hardware_security_layer.js';
+
+// Declarative Vulnerability Scanner & Zero-Day Detection Suite
+export { NucleiTemplateEngine, Severity, BUILTIN_TEMPLATES } from './vulnerability_scanner/nuclei_template_engine.js';
+export { ZeroDayDetector, ZeroDayThreatLevel } from './vulnerability_scanner/zero_day_detector.js';
+export { CVEKnowledgeBase, CVE_ENTRIES } from './vulnerability_scanner/cve_knowledge_base.js';
+export { AgentSecurityTrainer, TRAINING_MODULES } from './vulnerability_scanner/agent_security_trainer.js';
+
+

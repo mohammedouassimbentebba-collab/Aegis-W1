@@ -5,23 +5,70 @@
  * Agents possess zero implicit rights. All operations require an explicitly
  * signed, scope-restricted, time-bounded cryptographic token.
  *
- * REMEDIATION (V-05):
- * Single-Use Monotonic Nonce Tracking: Each token is immediately consumed
- * upon verification to prevent replay attacks within its validity window.
+ * REMEDIATION (V-05): Single-Use Monotonic Nonce Tracking
+ * REMEDIATION (V-06): Timing-Safe HMAC Comparison (crypto.timingSafeEqual)
+ * REMEDIATION (V-07): Hardcoded Key Elimination — env var or strong random
+ * REMEDIATION (V-08): Consumed-Token Pruning — prevents unbounded memory growth
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
+
+/**
+ * Maximum number of consumed token entries before forced pruning.
+ * Prevents memory exhaustion under sustained high-throughput verification.
+ */
+const MAX_CONSUMED_ENTRIES = 10000;
+
+/**
+ * Pruning batch size — remove this many oldest expired entries per prune cycle.
+ */
+const PRUNE_BATCH_SIZE = 1000;
 
 export class CapabilityTokenManager {
-  constructor(secretKey = 'w1_fortress_immutable_master_key', options = {}) {
-    this.secretKey = secretKey;
+  /**
+   * @param {string|null} secretKey - HMAC-SHA256 signing key. If null, reads
+   *   from W1_CAPABILITY_HMAC_KEY env var or generates a strong ephemeral key.
+   * @param {Object} options
+   * @param {boolean} [options.enforceSingleUse=true] - Whether tokens are single-use by default.
+   * @param {boolean} [options.suppressKeyWarning=false] - Suppress the auto-generated key warning (for tests).
+   */
+  constructor(secretKey = null, options = {}) {
+    if (secretKey) {
+      this.secretKey = secretKey;
+    } else if (process.env.W1_CAPABILITY_HMAC_KEY) {
+      this.secretKey = process.env.W1_CAPABILITY_HMAC_KEY;
+    } else {
+      // Generate a cryptographically strong ephemeral key
+      this.secretKey = randomBytes(32).toString('hex');
+      if (!options.suppressKeyWarning) {
+        // In production, W1_CAPABILITY_HMAC_KEY MUST be set
+        console.warn(
+          '[W1™ SECURITY WARNING] No HMAC key provided and W1_CAPABILITY_HMAC_KEY env var not set. ' +
+          'Using auto-generated ephemeral key. Tokens will NOT survive process restarts. ' +
+          'Set W1_CAPABILITY_HMAC_KEY for production deployments.'
+        );
+      }
+    }
+
     this.revocationList = new Set();
-    this.consumedTokens = new Set();
-    this.enforceSingleUseByDefault = options.enforceSingleUse !== undefined ? options.enforceSingleUse : true;
+
+    // Map<tokenId, expiresAt> — enables pruning of expired entries
+    this.consumedTokens = new Map();
+
+    this.enforceSingleUseByDefault = options.enforceSingleUse !== undefined
+      ? options.enforceSingleUse
+      : true;
   }
 
   /**
    * Issues a signed capability token for an authorized operation.
+   * @param {Object} params
+   * @param {string} params.agentId - Identity of the agent receiving this token.
+   * @param {string} params.allowedAction - Permitted action (or '*' for wildcard).
+   * @param {string} params.allowedResource - Permitted resource (or '*' for wildcard).
+   * @param {number} [params.ttlSeconds=60] - Token time-to-live in seconds.
+   * @param {boolean|null} [params.singleUse=null] - Override single-use enforcement.
+   * @returns {Object} Signed capability token.
    */
   issueToken({ agentId, allowedAction, allowedResource, ttlSeconds = 60, singleUse = null }) {
     const tokenId = crypto.randomUUID();
@@ -29,7 +76,7 @@ export class CapabilityTokenManager {
     const expiresAt = issuedAt + (ttlSeconds * 1000);
     const isSingleUse = singleUse !== null ? singleUse : this.enforceSingleUseByDefault;
 
-    const payload = JSON.stringify({
+    const payload = this._buildPayload({
       tokenId,
       agentId,
       allowedAction,
@@ -56,20 +103,39 @@ export class CapabilityTokenManager {
   }
 
   /**
-   * Verifies the cryptographic integrity and validity of a presented token.
-   * By default, consumes single-use tokens upon successful verification.
+   * Verifies the cryptographic integrity, temporal validity, scope match,
+   * revocation status, and single-use nonce of a presented token.
+   *
+   * Uses constant-time comparison (crypto.timingSafeEqual) to prevent
+   * timing side-channel attacks on HMAC signatures.
+   *
+   * @param {Object} token - The capability token to verify.
+   * @param {string} requestedAction - The action the caller wants to perform.
+   * @param {string} requestedResource - The resource the caller wants to access.
+   * @param {boolean} [consume=true] - Whether to mark the token as consumed upon success.
+   * @returns {{ valid: boolean, reason?: string }}
    */
   verifyToken(token, requestedAction, requestedResource, consume = true) {
-    if (!token || !token.signature || !token.tokenId) {
+    // 0. Structural validation (fail-closed)
+    if (!token || typeof token !== 'object') {
       return { valid: false, reason: 'Malformed or missing capability token' };
+    }
+
+    if (!token.signature || !token.tokenId || !token.agentId) {
+      return { valid: false, reason: 'Structurally incomplete token: missing signature, tokenId, or agentId' };
+    }
+
+    // 1. Mandatory expiration enforcement — tokens without expiresAt are rejected
+    if (token.expiresAt === undefined || token.expiresAt === null) {
+      return { valid: false, reason: 'Token missing mandatory expiresAt field — indefinite tokens forbidden' };
     }
 
     if (Date.now() > token.expiresAt) {
       return { valid: false, reason: 'Capability token expired' };
     }
 
-    // 1. Recompute and verify signature FIRST (Authentication before authorization state)
-    const payloadWithSingleUse = JSON.stringify({
+    // 2. Cryptographic HMAC-SHA256 Signature Verification (constant-time)
+    const payload = this._buildPayload({
       tokenId: token.tokenId,
       agentId: token.agentId,
       allowedAction: token.allowedAction,
@@ -79,33 +145,25 @@ export class CapabilityTokenManager {
       singleUse: token.singleUse !== undefined ? token.singleUse : true
     });
 
-    const payloadLegacy = JSON.stringify({
-      tokenId: token.tokenId,
-      agentId: token.agentId,
-      allowedAction: token.allowedAction,
-      allowedResource: token.allowedResource,
-      issuedAt: token.issuedAt,
-      expiresAt: token.expiresAt
-    });
+    const expectedSig = createHmac('sha256', this.secretKey)
+      .update(payload)
+      .digest('hex');
 
-    const sigWithSingleUse = createHmac('sha256', this.secretKey).update(payloadWithSingleUse).digest('hex');
-    const sigLegacy = createHmac('sha256', this.secretKey).update(payloadLegacy).digest('hex');
-
-    if (token.signature !== sigWithSingleUse && token.signature !== sigLegacy) {
+    if (!this._timingSafeCompare(token.signature, expectedSig)) {
       return { valid: false, reason: 'Cryptographic signature mismatch: token was forged or tampered with' };
     }
 
-    // 2. Check revocation list
+    // 3. Check revocation list
     if (this.revocationList.has(token.tokenId)) {
       return { valid: false, reason: 'Capability token has been revoked by military command' };
     }
 
-    // 3. Check single-use consumption
+    // 4. Check single-use consumption (replay prevention)
     if (this.consumedTokens.has(token.tokenId)) {
       return { valid: false, reason: 'Capability token already consumed (single-use nonce exhausted)' };
     }
 
-    // 4. Check scope match (allow wildcard '*')
+    // 5. Scope verification (allow wildcard '*')
     if (token.allowedAction !== '*' && token.allowedAction !== requestedAction) {
       return { valid: false, reason: `Action scope mismatch: token allows '${token.allowedAction}', requested '${requestedAction}'` };
     }
@@ -114,10 +172,11 @@ export class CapabilityTokenManager {
       return { valid: false, reason: `Resource scope mismatch: token allows '${token.allowedResource}', requested '${requestedResource}'` };
     }
 
-    // 5. Mark token as consumed if single-use
+    // 6. Mark token as consumed if single-use
     const shouldConsume = consume && (token.singleUse !== false);
     if (shouldConsume) {
-      this.consumedTokens.add(token.tokenId);
+      this.consumedTokens.set(token.tokenId, token.expiresAt);
+      this._pruneConsumedIfNeeded();
     }
 
     return { valid: true };
@@ -137,7 +196,8 @@ export class CapabilityTokenManager {
   }
 
   /**
-   * Verifies that a capability token is cryptographically valid and bound to the requested HTTP verb and path.
+   * Verifies that a capability token is cryptographically valid and bound
+   * to the requested HTTP verb and path.
    */
   verifyHttpBinding(token, method, path, consume = true) {
     return this.verifyToken(token, method.toUpperCase(), path, consume);
@@ -150,5 +210,75 @@ export class CapabilityTokenManager {
   isConsumed(tokenId) {
     return this.consumedTokens.has(tokenId);
   }
-}
 
+  /**
+   * Builds the canonical JSON payload for HMAC signing.
+   * Field order is deterministic to ensure consistent signature generation.
+   * @private
+   */
+  _buildPayload({ tokenId, agentId, allowedAction, allowedResource, issuedAt, expiresAt, singleUse }) {
+    return JSON.stringify({
+      tokenId,
+      agentId,
+      allowedAction,
+      allowedResource,
+      issuedAt,
+      expiresAt,
+      singleUse
+    });
+  }
+
+  /**
+   * Constant-time string comparison using crypto.timingSafeEqual.
+   * Prevents timing side-channel attacks on HMAC signatures.
+   * @private
+   * @param {string} given - The signature provided by the caller.
+   * @param {string} expected - The recomputed expected signature.
+   * @returns {boolean}
+   */
+  _timingSafeCompare(given, expected) {
+    const givenBuf = Buffer.from(String(given), 'utf8');
+    const expectedBuf = Buffer.from(String(expected), 'utf8');
+
+    // Length mismatch — still do a dummy comparison to avoid timing leak
+    if (givenBuf.length !== expectedBuf.length) {
+      // Compare against itself to burn the same CPU time
+      timingSafeEqual(expectedBuf, expectedBuf);
+      return false;
+    }
+
+    return timingSafeEqual(givenBuf, expectedBuf);
+  }
+
+  /**
+   * Prunes expired consumed-token entries when the map exceeds MAX_CONSUMED_ENTRIES.
+   * Uses a batch eviction strategy to amortize pruning cost.
+   * @private
+   */
+  _pruneConsumedIfNeeded() {
+    if (this.consumedTokens.size <= MAX_CONSUMED_ENTRIES) {
+      return;
+    }
+
+    const now = Date.now();
+    let pruned = 0;
+
+    for (const [tokenId, expiresAt] of this.consumedTokens) {
+      if (expiresAt < now) {
+        this.consumedTokens.delete(tokenId);
+        pruned++;
+        if (pruned >= PRUNE_BATCH_SIZE) break;
+      }
+    }
+
+    // If nothing was pruned (all still valid), evict oldest entries by insertion order
+    if (pruned === 0 && this.consumedTokens.size > MAX_CONSUMED_ENTRIES) {
+      let evicted = 0;
+      for (const tokenId of this.consumedTokens.keys()) {
+        this.consumedTokens.delete(tokenId);
+        evicted++;
+        if (evicted >= PRUNE_BATCH_SIZE) break;
+      }
+    }
+  }
+}
