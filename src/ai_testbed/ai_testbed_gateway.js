@@ -379,7 +379,8 @@ export class AiTestbedGateway {
     const tent = new HermeticWorkTent({
       agentId: sanitizedId,
       tentRoot: agentTentRoot,
-      allowedTools: this.defaultAllowedTools
+      allowedTools: this.defaultAllowedTools,
+      supervisorSecret: this.supervisorSecret
     });
 
     const harnessAdapter = new AgentHarnessAdapter({
@@ -432,32 +433,38 @@ export class AiTestbedGateway {
   }
 
   /**
-   * Validates CORS origin against localhost whitelist.
+   * Validates CORS origin against strict localhost hostname whitelist (SEC-06).
+   * Prevents prefix-bypass attacks such as http://localhost.evil.com.
    * @private
    */
   _isAllowedOrigin(origin) {
-    if (!origin) return false;
-    return (
-      origin.startsWith('http://localhost') ||
-      origin.startsWith('http://127.0.0.1') ||
-      origin.startsWith('https://localhost') ||
-      origin.startsWith('https://127.0.0.1')
-    );
+    if (!origin || typeof origin !== 'string') return false;
+    try {
+      const parsed = new URL(origin);
+      const validProtocol = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      const validHost =
+        parsed.hostname === 'localhost' ||
+        parsed.hostname === '127.0.0.1' ||
+        parsed.hostname === '[::1]';
+      return validProtocol && validHost;
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Verifies supervisor authentication for sensitive endpoints.
-   * Requires a shared secret via Authorization: Bearer <secret> header.
+   * Verifies supervisor authentication for sensitive endpoints (SEC-04).
+   * Fail-closed: if no supervisor secret is configured, access is DENIED.
+   * Requires Authorization: Bearer <secret> compared in constant time.
    * @private
    */
   _verifySupervisorAuth(authHeader) {
-    // If no supervisor secret is configured, allow access (development mode)
-    // In production, W1_SUPERVISOR_SECRET MUST be set
+    // Fail-closed: never allow unauthenticated supervisor actions when secret is missing
     if (!this.supervisorSecret) {
-      return true;
+      return false;
     }
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
       return false;
     }
 

@@ -52,7 +52,7 @@ export class W1WebDefenseAdapter {
    * Evaluates an incoming HTTP request before it touches the target backend.
    * Enforces the DO-178C Level A non-bypassable safety invariant floor.
    */
-  async processIncomingPayload({ agentId, endpoint, method, headers = {}, body = {}, bodyStr = '' }) {
+  async processIncomingPayload({ agentId, endpoint, method, headers = {}, body = {}, bodyStr = '', consumeToken = true }) {
     // -----------------------------------------------------------------------
     // INVARIANT FLOOR 1: DATA WIPER & DESTRUCTIVE COMMAND CHECK (Admin Endpoint)
     // -----------------------------------------------------------------------
@@ -133,20 +133,33 @@ export class W1WebDefenseAdapter {
         };
       }
 
-      // If a capability token is presented, verify cryptographic method & path binding
+      // Strict fail-closed cryptographic verification of capability token, HTTP method, and path binding (SEC-02)
       try {
-        const rawToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-        const tokenObj = typeof rawToken === 'string' && rawToken.startsWith('{')
-          ? JSON.parse(rawToken)
-          : null;
-        if (tokenObj) {
-          const bindingCheck = this.tokenManager.verifyHttpBinding(tokenObj, method, endpoint);
-          if (!bindingCheck.valid) {
-            return {
-              allowed: false,
-              reason: `UNAUTHORIZED_EXFILTRATION_BLOCKED: ${bindingCheck.reason}`
-            };
-          }
+        const rawToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+          ? authHeader.slice(7).trim()
+          : (typeof authHeader === 'string' ? authHeader.trim() : '');
+
+        if (!rawToken || !rawToken.startsWith('{')) {
+          return {
+            allowed: false,
+            reason: 'UNAUTHORIZED_EXFILTRATION_BLOCKED: Capability token must be a signed JSON object.'
+          };
+        }
+
+        const tokenObj = JSON.parse(rawToken);
+        if (!tokenObj || typeof tokenObj !== 'object' || Array.isArray(tokenObj)) {
+          return {
+            allowed: false,
+            reason: 'UNAUTHORIZED_EXFILTRATION_BLOCKED: Malformed capability token structure.'
+          };
+        }
+
+        const bindingCheck = this.tokenManager.verifyHttpBinding(tokenObj, method, endpoint, consumeToken);
+        if (!bindingCheck.valid) {
+          return {
+            allowed: false,
+            reason: `UNAUTHORIZED_EXFILTRATION_BLOCKED: ${bindingCheck.reason}`
+          };
         }
       } catch {
         return {

@@ -64,7 +64,7 @@ describe('Fortress Commander End-to-End Multi-Domain Defense Grid', () => {
   });
 
   it('Scenario 4: Should successfully commit fully compliant and verified mission to Cryptographic DAG', async () => {
-    const commander = new FortressCommander({ masterSecretKey: 'top_secret' });
+    const commander = new FortressCommander({}, { masterSecretKey: 'top_secret' });
 
     const token = commander.tokenManager.issueToken({
       agentId: 'loyal_officer',
@@ -80,7 +80,7 @@ describe('Fortress Commander End-to-End Multi-Domain Defense Grid', () => {
       actionProposal: {
         actionType: 'TOOL_CALL',
         toolName: 'compute_trajectory',
-        parameters: { azimuth: 45, elevation: 30 },
+        parameters: { resource: 'trajectory_buffer', azimuth: 45, elevation: 30 },
         capabilityToken: token
       },
       nextStateComputation: (prevState) => ({

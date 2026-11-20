@@ -33,12 +33,12 @@ describe('Lyapunov State Trajectory Stability Verifier & Mathematical Kernel', (
   });
 
   it('should mathematically reject divergent state mutations inside DeterministicKernel', () => {
+    const tokenManager = new CapabilityTokenManager(null, { suppressKeyWarning: true });
     const kernel = new DeterministicKernel({
       activeCapabilities: [],
       anomalyDrift: 0.0
-    });
+    }, { tokenManager });
 
-    const tokenManager = new CapabilityTokenManager();
     const token = tokenManager.issueToken({
       agentId: 'destabilizer_node',
       allowedAction: '*',

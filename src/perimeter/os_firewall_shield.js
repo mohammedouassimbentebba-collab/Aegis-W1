@@ -8,6 +8,7 @@
  * 4. RAG & External Data Trojan De-Fang Pipeline.
  */
 
+import path from 'node:path';
 import { ThreatDomain, ThreatSeverity, ThreatDetectionEvent } from '../core/types.js';
 
 export class OSFirewallShield {
@@ -18,6 +19,10 @@ export class OSFirewallShield {
       'localhost',
       '127.0.0.1'
     ]);
+    // REMEDIATION (SEC-07): Explicit filesystem allowlist (defaults to ./workspace)
+    this.allowedPaths = Array.isArray(options.allowedPaths)
+      ? options.allowedPaths.map(p => path.resolve(p))
+      : [path.resolve('./workspace')];
     this.blockedSyscallsLog = [];
     this.agentSpawnRegistry = new Map(); // parentId -> count of children spawned
     this.maxChildSpawnsAllowed = options.maxChildren || 2;
@@ -135,32 +140,96 @@ export class OSFirewallShield {
 
   /**
    * Evaluates a low-level OS filesystem access request.
+   * REMEDIATION (SEC-07):
+   * - Rejects null bytes, raw '..' traversal segments, and Windows extended/device prefixes (\\?\, \\.\, UNC).
+   * - Normalizes via path.resolve and path.posix.normalize before checking prohibited system directories.
+   * - Enforces an explicit filesystem Allowlist (this.allowedPaths) alongside the denylist.
    */
   interceptFileSystemCall({ agentId, operation, targetPath }) {
-    const normalized = (targetPath || '').replace(/\\/g, '/').toLowerCase();
+    if (!targetPath || typeof targetPath !== 'string' || targetPath.includes('\0')) {
+      this.logBlockedCall(agentId, 'FILESYSTEM_ACCESS_VIOLATION', { operation, targetPath, reason: 'INVALID_OR_NULL_PATH' });
+      return {
+        allowed: false,
+        errorCode: 'EPERM',
+        reason: '[OS_KERNEL_SHIELD] Malformed or null-byte filesystem path rejected.'
+      };
+    }
+
+    // 1. Reject Windows extended-length / device / UNC prefixes (\\?\, \\.\, //?/, //./, \\server\)
+    if (/^(\\\\[?.]\\|\/\/[?.]\/|\\\\|\/\/)/.test(targetPath)) {
+      this.logBlockedCall(agentId, 'FILESYSTEM_ACCESS_VIOLATION', { operation, targetPath, reason: 'EXTENDED_OR_DEVICE_PREFIX' });
+      return {
+        allowed: false,
+        errorCode: 'EPERM',
+        reason: `[OS_KERNEL_SHIELD] Extended/device/UNC path prefix '${targetPath}' is strictly forbidden.`
+      };
+    }
+
+    // 2. Reject raw traversal segments ('..') or URL-encoded traversal ('%2e%2e')
+    if (/(^|[\\/])\.\.([\\/]|$)/.test(targetPath) || /%2e%2e/i.test(targetPath)) {
+      this.logBlockedCall(agentId, 'FILESYSTEM_ACCESS_VIOLATION', { operation, targetPath, reason: 'PATH_TRAVERSAL_DETECTED' });
+      return {
+        allowed: false,
+        errorCode: 'EPERM',
+        reason: `[OS_KERNEL_SHIELD] Path traversal sequence in '${targetPath}' is blocked by kernel defense rules.`
+      };
+    }
+
+    // 3. Canonicalize (both POSIX-style and host path.resolve) and check prohibited OS directories
+    const slashNormalized = path.posix.normalize(targetPath.replace(/\\/g, '/')).toLowerCase();
+    const resolvedNative = path.resolve(targetPath);
+    const resolvedForward = resolvedNative.replace(/\\/g, '/').toLowerCase();
+    const resolvedWithoutDrive = resolvedForward.replace(/^[a-z]:/, '');
 
     const prohibitedSystemPaths = [
       'c:/windows',
-      'c:/system32',
+      'c:/program files',
+      'c:/program files (x86)',
+      'c:/programdata',
       '/etc',
       '/var',
       '/usr',
       '/bin',
-      '/boot'
+      '/sbin',
+      '/boot',
+      '/root',
+      '/proc',
+      '/sys',
+      '/dev',
+      '/lib',
+      '/lib64'
     ];
 
+    const candidates = [slashNormalized, resolvedForward, resolvedWithoutDrive];
     for (const forbidden of prohibitedSystemPaths) {
-      if (normalized.startsWith(forbidden)) {
-        this.logBlockedCall(agentId, 'FILESYSTEM_ACCESS_VIOLATION', { operation, targetPath });
-        return {
-          allowed: false,
-          errorCode: 'EPERM',
-          reason: `[OS_KERNEL_SHIELD] Access to sensitive operating system directory '${targetPath}' is blocked by kernel defense rules.`
-        };
+      for (const candidate of candidates) {
+        if (candidate === forbidden || candidate.startsWith(forbidden + '/')) {
+          this.logBlockedCall(agentId, 'FILESYSTEM_ACCESS_VIOLATION', { operation, targetPath, resolved: resolvedNative });
+          return {
+            allowed: false,
+            errorCode: 'EPERM',
+            reason: `[OS_KERNEL_SHIELD] Access to sensitive operating system directory '${targetPath}' is blocked by kernel defense rules.`
+          };
+        }
       }
     }
 
-    return { allowed: true };
+    // 4. Enforce explicit Allowlist containment (Zero Ambient Filesystem Authority)
+    const isWithinAllowlist = this.allowedPaths.some((allowedRoot) => {
+      const rel = path.relative(allowedRoot, resolvedNative);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    });
+
+    if (!isWithinAllowlist) {
+      this.logBlockedCall(agentId, 'FILESYSTEM_ALLOWLIST_DENIED', { operation, targetPath, resolved: resolvedNative });
+      return {
+        allowed: false,
+        errorCode: 'EPERM',
+        reason: `[OS_KERNEL_SHIELD] Path '${targetPath}' is outside authorized filesystem allowlist.`
+      };
+    }
+
+    return { allowed: true, resolvedPath: resolvedNative };
   }
 
   /**

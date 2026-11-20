@@ -74,14 +74,14 @@ describe('Deterministic Non-LLM Kernel & Cryptographic DAG', () => {
   });
 
   it('should block destructive shell commands via Static Linter without invoking any LLM', () => {
-    const tokenManager = new CapabilityTokenManager();
+    const tokenManager = new CapabilityTokenManager(null, { suppressKeyWarning: true });
     const token = tokenManager.issueToken({
       agentId: 'test_agent',
       allowedAction: '*',
       allowedResource: '*'
     });
 
-    const linter = new StaticLinter();
+    const linter = new StaticLinter({ tokenManager });
     const result = linter.validateProposal({
       actionType: 'TOOL_CALL',
       toolName: 'format_disk',

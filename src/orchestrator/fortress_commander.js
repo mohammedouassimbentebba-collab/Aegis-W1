@@ -28,12 +28,15 @@ import { WarningBroadcastSystem } from './warning_broadcast_system.js';
 
 export class FortressCommander {
   constructor(initialState = {}, options = {}) {
-    this.kernel = new DeterministicKernel(initialState, options);
+    this.tokenManager = options.tokenManager || options.capabilityTokenManager || new CapabilityTokenManager(options.masterSecretKey);
+    this.kernel = new DeterministicKernel(initialState, {
+      ...options,
+      tokenManager: this.tokenManager
+    });
     this.radar = new EarlyWarningRadar(options.radarOptions);
     this.airDefense = new AirDefenseInterceptor(options.airDefenseOptions);
     this.submarineSonar = new DeepSubmarineSonar(options.submarineOptions);
     this.byzantineCouncil = new ByzantineCounterIntel(options.byzantineOptions);
-    this.tokenManager = new CapabilityTokenManager(options.masterSecretKey);
     this.osFirewall = new OSFirewallShield(options.firewallOptions);
     this.warningSystem = new WarningBroadcastSystem();
     this.electronicWarfare = new ElectronicWarfareOfficer(options.ewOptions);
@@ -229,10 +232,8 @@ export class FortressCommander {
       };
     }
 
-    // Auto-attach IFF proof if friendly agent is registered
-    if (!actionProposal.iffProof && this.airDefense.certifiedFriendlyAgents.has(agentId)) {
-      actionProposal.iffProof = this.generateIFFProof(agentId);
-    }
+    // NOTE (SEC-13): IFF proofs are NEVER auto-attached server-side.
+    // Callers claiming a registered friendly agentId must supply their own cryptographic iffProof.
 
     // =========================================================================
     // LAYER 2.5: Honeypot Decoy Enclave Inspection (Canary Tripwire)

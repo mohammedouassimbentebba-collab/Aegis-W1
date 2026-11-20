@@ -14,6 +14,7 @@
 
 import http from 'node:http';
 import { OSFirewallShield } from '../perimeter/os_firewall_shield.js';
+import { CapabilityTokenManager } from '../perimeter/capability_token_manager.js';
 
 export class CrownJewelWebPortal {
   constructor(options = {}) {
@@ -21,6 +22,7 @@ export class CrownJewelWebPortal {
     this.port = options.port || 0; // 0 for dynamic ephemeral port
     this.server = null;
     this.firewall = options.firewall || null; // W1 Firewall instance if protected
+    this.tokenManager = options.tokenManager || (this.firewall && this.firewall.tokenManager) || new CapabilityTokenManager();
     this.relaxedMode = options.relaxedMode || false;
     this.osShield = new OSFirewallShield();
 
@@ -119,7 +121,8 @@ export class CrownJewelWebPortal {
         method: req.method,
         headers: req.headers,
         body,
-        bodyStr
+        bodyStr,
+        consumeToken: false // Host layer performs authoritative verification + single-use consumption
       });
 
       if (!firewallEvaluation.allowed) {
@@ -154,14 +157,14 @@ export class CrownJewelWebPortal {
       status: 'REACHED_BACKEND'
     });
 
-    // 1. Crown Jewel Vault Read (Requires capability token at host layer)
+    // 1. Crown Jewel Vault Read (Requires cryptographically verified capability token at host layer — SEC-02)
     if (pathname === '/api/v1/vault/intel' && req.method === 'GET') {
-      const authHeader = req.headers['authorization'] || req.headers['x-capability-token'];
-      if (!authHeader) {
+      const hostAuth = this._verifyHostCapabilityHeader(req.headers, req.method, pathname);
+      if (!hostAuth.valid) {
         res.writeHead(403, { 'Content-Type': 'application/json', 'X-W1-Interception': 'TRUE' });
         return res.end(JSON.stringify({
           error: 'Forbidden',
-          reason: 'HOST_DEFENSE_IN_DEPTH: Access to classified vault requires cryptographic capability token.'
+          reason: `HOST_DEFENSE_IN_DEPTH: Access to classified vault denied (${hostAuth.reason}).`
         }));
       }
 
@@ -172,14 +175,14 @@ export class CrownJewelWebPortal {
       }));
     }
 
-    // 2. Master Credentials Endpoint (Requires capability token at host layer)
+    // 2. Master Credentials Endpoint (Requires cryptographically verified capability token at host layer — SEC-02)
     if (pathname === '/api/v1/credentials' && req.method === 'GET') {
-      const authHeader = req.headers['authorization'] || req.headers['x-capability-token'];
-      if (!authHeader) {
+      const hostAuth = this._verifyHostCapabilityHeader(req.headers, req.method, pathname);
+      if (!hostAuth.valid) {
         res.writeHead(403, { 'Content-Type': 'application/json', 'X-W1-Interception': 'TRUE' });
         return res.end(JSON.stringify({
           error: 'Forbidden',
-          reason: 'HOST_DEFENSE_IN_DEPTH: Zero Ambient Authority enforced at host layer. Master key denied.'
+          reason: `HOST_DEFENSE_IN_DEPTH: Zero Ambient Authority enforced at host layer (${hostAuth.reason}). Master key denied.`
         }));
       }
 
@@ -245,6 +248,36 @@ export class CrownJewelWebPortal {
     // Default 404
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
+  }
+
+  /**
+   * Host-level fail-closed cryptographic verification of Authorization / X-Capability-Token.
+   * Rejects missing, non-JSON, malformed, forged, expired, replayed, or wrong-scope tokens.
+   * @private
+   */
+  _verifyHostCapabilityHeader(headers = {}, method = 'GET', pathname = '') {
+    const authHeader = headers['authorization'] || headers['x-capability-token'];
+    if (!authHeader || typeof authHeader !== 'string') {
+      return { valid: false, reason: 'Missing cryptographic capability token' };
+    }
+
+    const rawToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+    if (!rawToken || !rawToken.startsWith('{')) {
+      return { valid: false, reason: 'Capability token must be a signed JSON object' };
+    }
+
+    let tokenObj;
+    try {
+      tokenObj = JSON.parse(rawToken);
+    } catch {
+      return { valid: false, reason: 'Malformed JSON capability token' };
+    }
+
+    if (!tokenObj || typeof tokenObj !== 'object' || Array.isArray(tokenObj)) {
+      return { valid: false, reason: 'Malformed capability token structure' };
+    }
+
+    return this.tokenManager.verifyHttpBinding(tokenObj, method, pathname, true);
   }
 }
 

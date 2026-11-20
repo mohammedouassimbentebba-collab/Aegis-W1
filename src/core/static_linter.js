@@ -89,8 +89,11 @@ export class StaticLinter {
       violations.push('CAPABILITY_TOKEN_EXPIRED');
     } else {
       // === Subject Identity Binding ===
-      // If the executing agent's ID is known, the token must be issued TO that agent.
-      if (executingAgentId && capabilityToken.agentId && capabilityToken.agentId !== executingAgentId) {
+      // Mandatory agentId on token; when executingAgentId is known, they must match strictly.
+      if (!capabilityToken.agentId) {
+        errors.push('Capability token missing mandatory agentId subject binding.');
+        violations.push('CAPABILITY_TOKEN_STRUCTURALLY_MALFORMED');
+      } else if (executingAgentId && capabilityToken.agentId !== executingAgentId) {
         errors.push(
           `Token subject mismatch: token issued for '${capabilityToken.agentId}', ` +
           `but executed by '${executingAgentId}'. Cross-agent token theft detected.`
@@ -98,10 +101,12 @@ export class StaticLinter {
         violations.push('CAPABILITY_TOKEN_SUBJECT_MISMATCH');
       }
 
-      // === Cryptographic HMAC-SHA256 Verification ===
-      // When tokenManager is injected, perform real signature verification.
-      // consume=false here because the kernel consumes on commit.
-      if (this.tokenManager) {
+      // === Mandatory Cryptographic HMAC-SHA256 Verification (Fail-Closed) ===
+      // Never skip cryptographic verification when tokenManager is absent.
+      if (!this.tokenManager) {
+        errors.push('Fail-closed security error: StaticLinter requires an injected CapabilityTokenManager for cryptographic verification.');
+        violations.push('CAPABILITY_TOKEN_CRYPTO_FAILED');
+      } else {
         const verification = this.tokenManager.verifyToken(
           capabilityToken,
           requestedAction,

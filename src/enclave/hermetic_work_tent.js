@@ -35,6 +35,7 @@ export class HermeticWorkTent {
     ]);
 
     this.tokenManager = options.tokenManager || new CapabilityTokenManager();
+    this.supervisorSecret = options.supervisorSecret || process.env.W1_SUPERVISOR_SECRET || null;
     this.watchdog = options.watchdog || new AntiEscapeWatchdog({ tentRoot: this.tentRoot });
     this.watchdog.setTentRoot(this.tentRoot);
     this.testVault = options.testVault || new ImmutableTestVault();
@@ -295,8 +296,9 @@ export class HermeticWorkTent {
 
   /**
    * Supervisor resolves ticket: either grants explicit leased capability or rejects with guidance.
+   * REMEDIATION (SEC-03): Fail-closed default decision is 'REJECTED'.
    */
-  resolveEscalationTicket(ticketId, decision = 'APPROVED', supervisorReason = '') {
+  resolveEscalationTicket(ticketId, decision = 'REJECTED', supervisorReason = '') {
     const ticket = this.activeEscalationTickets.get(ticketId);
     if (!ticket) return { success: false, reason: 'Ticket not found' };
 
@@ -341,11 +343,35 @@ export class HermeticWorkTent {
     });
   }
 
+  /**
+   * Lifts quarantine only upon constant-time verification of the configured supervisor secret.
+   * REMEDIATION (SEC-03): Eliminated hardcoded backdoor key; fail-closed if unconfigured.
+   */
   unquarantine(supervisorKey) {
-    if (supervisorKey === 'w1_military_override_key') {
+    if (!this.supervisorSecret) {
+      return {
+        success: false,
+        message: 'Fail-closed: Supervisor override disabled because W1_SUPERVISOR_SECRET is not configured.'
+      };
+    }
+
+    if (typeof supervisorKey !== 'string' || supervisorKey.length === 0) {
+      return { success: false, message: 'Invalid supervisor key: Quarantine cannot be lifted.' };
+    }
+
+    const expectedBuf = Buffer.from(this.supervisorSecret, 'utf8');
+    const providedBuf = Buffer.from(supervisorKey, 'utf8');
+
+    if (expectedBuf.length !== providedBuf.length) {
+      crypto.timingSafeEqual(expectedBuf, expectedBuf);
+      return { success: false, message: 'Invalid supervisor key: Quarantine cannot be lifted.' };
+    }
+
+    if (crypto.timingSafeEqual(expectedBuf, providedBuf)) {
       this.quarantined = false;
       return { success: true, message: `Agent '${this.agentId}' restored to operational status.` };
     }
+
     return { success: false, message: 'Invalid supervisor key: Quarantine cannot be lifted.' };
   }
 

@@ -9,18 +9,20 @@
  * 3. N-Version Interception Triad: Three orthogonal detectors evaluating independently.
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import { ThreatDomain, ThreatSeverity, ThreatDetectionEvent, InterceptionResult } from '../core/types.js';
 
 export class AirDefenseInterceptor {
   constructor(options = {}) {
     this.name = 'IronDome_Hardened_AirDefense';
-    this.iffSecretKey = options.iffSecretKey || 'w1_fortress_iff_master_key_2026';
+    // REMEDIATION (SEC-13): Eliminated hardcoded master IFF secret; use env var or strong CSPRNG key
+    this.iffSecretKey = options.iffSecretKey || process.env.W1_IFF_SECRET || randomBytes(32).toString('hex');
     this.enforceIFF = options.enforceIFF !== undefined ? options.enforceIFF : false;
     this.maxWarningsBeforeKineticStrike = options.maxWarnings || 1;
     this.agentStrikeHistory = new Map();
     this.interceptionLog = [];
     this.certifiedFriendlyAgents = new Map(); // agentId -> IFF Registration Record
+    this.usedIffNonces = new Set(); // Anti-replay tracking for IFF challenge nonces
     this.watchdogTimeoutMs = options.watchdogTimeoutMs || 5.0;
   }
 
@@ -57,7 +59,7 @@ export class AirDefenseInterceptor {
       };
     }
 
-    if (!iffProof.signature || !iffProof.nonce) {
+    if (!iffProof || typeof iffProof.signature !== 'string' || typeof iffProof.nonce !== 'string' || !iffProof.signature || !iffProof.nonce) {
       return {
         isFriend: false,
         status: 'IFF_CHALLENGE_FAILED',
@@ -65,11 +67,29 @@ export class AirDefenseInterceptor {
       };
     }
 
+    const nonceKey = `${agentId}:${iffProof.nonce}`;
+    if (this.usedIffNonces.has(nonceKey)) {
+      return {
+        isFriend: false,
+        status: 'IFF_REPLAY_DETECTED',
+        reason: `Cryptographic IFF nonce replay detected for Agent '${agentId}': Hostile radar spoofing attempt!`
+      };
+    }
+
     const expectedSig = createHmac('sha256', record.token)
       .update(iffProof.nonce)
       .digest('hex');
 
-    if (expectedSig !== iffProof.signature) {
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    const providedBuf = Buffer.from(iffProof.signature, 'utf8');
+    let sigValid = false;
+    if (expectedBuf.length !== providedBuf.length) {
+      timingSafeEqual(expectedBuf, expectedBuf);
+    } else {
+      sigValid = timingSafeEqual(expectedBuf, providedBuf);
+    }
+
+    if (!sigValid) {
       return {
         isFriend: false,
         status: 'IFF_SPOOFING_DETECTED',
@@ -77,6 +97,7 @@ export class AirDefenseInterceptor {
       };
     }
 
+    this.usedIffNonces.add(nonceKey);
     return { isFriend: true, status: 'IFF_STATUS_FRIEND' };
   }
 
