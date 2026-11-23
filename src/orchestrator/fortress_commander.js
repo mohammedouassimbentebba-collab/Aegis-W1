@@ -51,11 +51,11 @@ export class FortressCommander {
     return this.airDefense.registerFriendlyAgent(agentId, policyScope);
   }
 
-  generateIFFProof(agentId, nonce = crypto.randomUUID()) {
+  generateIFFProof(agentId, nonce = crypto.randomUUID(), issuedAt = Date.now()) {
     const record = this.airDefense.certifiedFriendlyAgents.get(agentId);
     if (!record) return null;
-    const signature = createHmac('sha256', record.token).update(nonce).digest('hex');
-    return { nonce, signature };
+    const signature = this.airDefense.computeIffSignature(record.token, nonce, issuedAt);
+    return { nonce, issuedAt, signature };
   }
 
   /**

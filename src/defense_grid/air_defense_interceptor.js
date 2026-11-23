@@ -22,7 +22,12 @@ export class AirDefenseInterceptor {
     this.agentStrikeHistory = new Map();
     this.interceptionLog = [];
     this.certifiedFriendlyAgents = new Map(); // agentId -> IFF Registration Record
-    this.usedIffNonces = new Set(); // Anti-replay tracking for IFF challenge nonces
+    // SEC-11/SEC-13: bounded anti-replay cache. nonceKey -> expiresAt (ms epoch).
+    // Only EXPIRED entries are ever evicted; saturation by live entries is fail-closed.
+    this.usedIffNonces = new Map();
+    this.iffProofTtlMs = options.iffProofTtlMs || 5 * 60 * 1000;
+    this.maxIffNonces = options.maxIffNonces || 10000;
+    this.lastIffPruneAt = Date.now();
     this.watchdogTimeoutMs = options.watchdogTimeoutMs || 5.0;
   }
 
@@ -59,27 +64,31 @@ export class AirDefenseInterceptor {
       };
     }
 
-    if (!iffProof || typeof iffProof.signature !== 'string' || typeof iffProof.nonce !== 'string' || !iffProof.signature || !iffProof.nonce) {
+    if (
+      !iffProof ||
+      typeof iffProof.signature !== 'string' || !iffProof.signature ||
+      typeof iffProof.nonce !== 'string' || !iffProof.nonce ||
+      typeof iffProof.issuedAt !== 'number' || !Number.isFinite(iffProof.issuedAt)
+    ) {
       return {
         isFriend: false,
         status: 'IFF_CHALLENGE_FAILED',
-        reason: `Agent '${agentId}' failed to present a valid cryptographic IFF challenge response.`
+        reason: `Agent '${agentId}' failed to present a valid cryptographic IFF challenge response (nonce, issuedAt, signature required).`
       };
     }
 
-    const nonceKey = `${agentId}:${iffProof.nonce}`;
-    if (this.usedIffNonces.has(nonceKey)) {
+    // Freshness window: proofs outside +/- TTL are stale. This is what makes nonce eviction after TTL safe.
+    const now = Date.now();
+    if (Math.abs(now - iffProof.issuedAt) > this.iffProofTtlMs) {
       return {
         isFriend: false,
-        status: 'IFF_REPLAY_DETECTED',
-        reason: `Cryptographic IFF nonce replay detected for Agent '${agentId}': Hostile radar spoofing attempt!`
+        status: 'IFF_PROOF_STALE',
+        reason: `Cryptographic IFF proof for Agent '${agentId}' is outside the freshness window: stale or future-dated proof rejected.`
       };
     }
 
-    const expectedSig = createHmac('sha256', record.token)
-      .update(iffProof.nonce)
-      .digest('hex');
-
+    // 1. Verify HMAC-SHA256 signature BEFORE touching anti-replay cache (SEC-11 anti-DoS)
+    const expectedSig = this.computeIffSignature(record.token, iffProof.nonce, iffProof.issuedAt);
     const expectedBuf = Buffer.from(expectedSig, 'utf8');
     const providedBuf = Buffer.from(iffProof.signature, 'utf8');
     let sigValid = false;
@@ -97,8 +106,49 @@ export class AirDefenseInterceptor {
       };
     }
 
-    this.usedIffNonces.add(nonceKey);
+    // 2. Only after signature validity is proven: prune expired nonces & check replay/saturation
+    this._pruneIffNonces(now);
+
+    const nonceKey = `${agentId}:${iffProof.nonce}:${iffProof.issuedAt}`;
+    if (this.usedIffNonces.has(nonceKey)) {
+      return {
+        isFriend: false,
+        status: 'IFF_REPLAY_DETECTED',
+        reason: `Cryptographic IFF nonce replay detected for Agent '${agentId}': Hostile radar spoofing attempt!`
+      };
+    }
+
+    // Fail-closed backpressure: never evict a live nonce to make room.
+    if (this.usedIffNonces.size >= this.maxIffNonces) {
+      return {
+        isFriend: false,
+        status: 'IFF_NONCE_CACHE_SATURATED',
+        reason: `IFF anti-replay cache saturated with live entries (${this.maxIffNonces}); refusing identification (fail-closed backpressure).`
+      };
+    }
+
+    this.usedIffNonces.set(nonceKey, iffProof.issuedAt + this.iffProofTtlMs);
     return { isFriend: true, status: 'IFF_STATUS_FRIEND' };
+  }
+
+  /**
+   * Canonical IFF signature: HMAC-SHA256(agentToken, "<nonce>.<issuedAt>").
+   * Binding the timestamp into the MAC lets expired nonces be evicted without re-opening replay.
+   */
+  computeIffSignature(agentToken, nonce, issuedAt) {
+    return createHmac('sha256', agentToken).update(`${nonce}.${issuedAt}`).digest('hex');
+  }
+
+  /**
+   * Removes ONLY expired IFF nonces (at most once per second unless at capacity).
+   * @private
+   */
+  _pruneIffNonces(now = Date.now()) {
+    if ((now - this.lastIffPruneAt) < 1000 && this.usedIffNonces.size < this.maxIffNonces) return;
+    for (const [key, expiresAt] of this.usedIffNonces) {
+      if (expiresAt < now) this.usedIffNonces.delete(key);
+    }
+    this.lastIffPruneAt = now;
   }
 
   /**

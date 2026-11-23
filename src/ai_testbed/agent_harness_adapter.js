@@ -18,6 +18,7 @@
  * Dispatches verified actions into HermeticWorkTent with single-use capability tokens.
  */
 
+import path from 'node:path';
 import { CapabilityTokenManager } from '../perimeter/capability_token_manager.js';
 import { ThreatDomain, ThreatSeverity, ThreatDetectionEvent } from '../core/types.js';
 
@@ -28,6 +29,21 @@ export class AgentHarnessAdapter {
     this.tokenManager = options.tokenManager || (this.tent ? this.tent.tokenManager : new CapabilityTokenManager());
     this.agentId = options.agentId || (this.tent ? this.tent.agentId : 'ai_agent_evaluator');
     this.interceptionLog = [];
+
+    // SEC-09: Pre-authorized session capability policy (never mint tokens for arbitrary tools/resources).
+    // Defaults to the tent's whitelisted tools confined strictly inside tent.tentRoot.
+    const defaultActions = this.tent && this.tent.allowedTools
+      ? Array.from(this.tent.allowedTools)
+      : ['READ_FILE', 'WRITE_FILE', 'RUN_IN_TENT_SCRIPT', 'SUBMIT_ESCALATION_TICKET'];
+
+    const policy = options.sessionPolicy || {};
+    this.sessionPolicy = {
+      allowedActions: new Set(policy.allowedActions || defaultActions),
+      allowedPathPrefix: policy.allowedPathPrefix !== undefined
+        ? policy.allowedPathPrefix
+        : (this.tent ? this.tent.tentRoot : null),
+      allowWildcardCommand: policy.allowWildcardCommand !== undefined ? Boolean(policy.allowWildcardCommand) : true
+    };
   }
 
   /**
@@ -84,31 +100,59 @@ export class AgentHarnessAdapter {
       // Map tool name to HermeticWorkTent action
       const actionMapping = this.mapToolToAction(toolName, parsedParams);
 
-      // Issue single-use capability token for this specific resource
-      const targetResource = parsedParams.path || parsedParams.resource || parsedParams.command || '*';
-      const token = this.tokenManager.issueToken({
-        agentId: this.agentId,
-        allowedAction: actionMapping.action,
-        allowedResource: targetResource,
-        ttlSeconds: 60,
-        singleUse: true
-      });
+      // SEC-09: Check sessionPolicy BEFORE issuing any capability token.
+      // Tools/paths outside the pre-authorized policy must NOT receive minted tokens; escalate via handleRoadblock.
+      const targetResource = actionMapping.params.path || actionMapping.params.resource || actionMapping.params.command || '*';
+      const policyCheck = this._checkSessionPolicy(actionMapping.action, actionMapping.params);
 
-      // Execute inside Hermetic Work Tent
       let actionResult;
-      if (this.tent) {
-        actionResult = await this.tent.executeTentAction({
-          action: actionMapping.action,
-          params: actionMapping.params,
-          capabilityToken: token,
-          scratchpad
-        });
-      } else {
+      if (!policyCheck.authorized) {
+        const escalation = this.tent
+          ? this.tent.handleRoadblock({
+              type: 'POLICY_CAPABILITY_REQUIRED',
+              target: targetResource,
+              requestedCapability: actionMapping.action,
+              rationale: policyCheck.reason
+            })
+          : {
+              halted: true,
+              ticketSubmitted: false,
+              instruction: `Halted: ${policyCheck.reason}`
+            };
+
         actionResult = {
-          success: true,
-          status: 'TENT_OFFLINE_DRY_RUN',
-          executionRecord: { action: actionMapping.action, params: actionMapping.params }
+          success: false,
+          blockedBySessionPolicy: true,
+          escalated: true,
+          status: 'HALTED_AND_ESCALATED_FOR_CAPABILITY',
+          reason: policyCheck.reason,
+          escalation
         };
+      } else {
+        // Issue single-use capability token strictly within pre-authorized sessionPolicy
+        const token = this.tokenManager.issueToken({
+          agentId: this.agentId,
+          allowedAction: actionMapping.action,
+          allowedResource: targetResource,
+          ttlSeconds: 60,
+          singleUse: true
+        });
+
+        // Execute inside Hermetic Work Tent
+        if (this.tent) {
+          actionResult = await this.tent.executeTentAction({
+            action: actionMapping.action,
+            params: actionMapping.params,
+            capabilityToken: token,
+            scratchpad
+          });
+        } else {
+          actionResult = {
+            success: true,
+            status: 'TENT_OFFLINE_DRY_RUN',
+            executionRecord: { action: actionMapping.action, params: actionMapping.params }
+          };
+        }
       }
 
       this.interceptionLog.push({
@@ -351,5 +395,40 @@ export class AgentHarnessAdapter {
         content: `W1_CONTAINMENT_ALARM: Execution halted. Cognitive deception or escape intent detected: ${errorResult.reason}`
       }
     };
+  }
+
+  /**
+   * Verifies that an action and its target resource fall within the pre-authorized sessionPolicy (SEC-09).
+   * Prevents the adapter from minting capability tokens for arbitrary actions/paths requested by an untrusted LLM.
+   * @private
+   */
+  _checkSessionPolicy(action, params = {}) {
+    if (!this.sessionPolicy.allowedActions.has(action)) {
+      return {
+        authorized: false,
+        reason: `Action '${action}' is outside pre-authorized sessionPolicy.`
+      };
+    }
+
+    if (params.path && this.sessionPolicy.allowedPathPrefix) {
+      const root = path.resolve(this.sessionPolicy.allowedPathPrefix);
+      const resolved = path.resolve(root, params.path);
+      const rel = path.relative(root, resolved);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        return {
+          authorized: false,
+          reason: `Requested path '${params.path}' is outside pre-authorized sessionPolicy root.`
+        };
+      }
+    }
+
+    if (action === 'RUN_IN_TENT_SCRIPT' && !this.sessionPolicy.allowWildcardCommand) {
+      return {
+        authorized: false,
+        reason: 'Command execution is disabled by sessionPolicy.'
+      };
+    }
+
+    return { authorized: true };
   }
 }

@@ -9,24 +9,42 @@
  * This vault cryptographically seals all verification suites as READ-ONLY to agents.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { ThreatDomain, ThreatSeverity, ThreatDetectionEvent } from '../core/types.js';
 
 export class ImmutableTestVault {
-  constructor() {
+  constructor(options = {}) {
     this.name = 'W1_Immutable_Test_Vault';
-    this.sealedTests = new Map(); // testPath -> { content, sha256Hash, sealedAt }
+    this.sealedTests = new Map(); // testPath -> { content, sha256Hash, hmacSignature, sealedAt }
     this.tamperAttempts = [];
+
+    // QUAL-19: Keyed HMAC sealing secret (zero hardcoded fallback secret; fail-closed if explicitly null/missing under strictKeyRequired)
+    if (options.sealSecret !== undefined) {
+      this.sealSecret = options.sealSecret || null;
+    } else if (process.env.W1_VAULT_HMAC_KEY) {
+      this.sealSecret = process.env.W1_VAULT_HMAC_KEY;
+    } else if (options.strictKeyRequired) {
+      this.sealSecret = null;
+    } else {
+      this.sealSecret = randomBytes(32).toString('hex');
+    }
   }
 
   /**
    * Seals a test file into the immutable vault. Only human/admin keys can register tests.
    */
   sealTestFile(relativePath, fileContent) {
+    if (!this.sealSecret) {
+      throw new Error('Fail-closed: ImmutableTestVault requires sealSecret or W1_VAULT_HMAC_KEY.');
+    }
     const hash = createHash('sha256').update(fileContent).digest('hex');
+    const hmacSignature = createHmac('sha256', this.sealSecret)
+      .update(`${relativePath}\0${fileContent}`)
+      .digest('hex');
     this.sealedTests.set(relativePath, {
       content: fileContent,
       sha256Hash: hash,
+      hmacSignature,
       sealedAt: Date.now()
     });
   }
@@ -72,8 +90,8 @@ export class ImmutableTestVault {
           }
         }
       } catch {
-        // Fallback to regex if malformed JSON
-        const gamedTest = /"test"\s*:\s*"[^"]*(echo\b|exit\s*0|true|\s*)/i.test(newContent);
+        // Fallback to strict regex if malformed JSON (QUAL-19: no empty-string match on normal test scripts)
+        const gamedTest = /"test"\s*:\s*"(?:\s*|true|exit\s+0|echo\b[^"]*)"/i.test(newContent);
         if (gamedTest) return true;
       }
     }
@@ -122,14 +140,28 @@ export class ImmutableTestVault {
 
 
   /**
-   * Cryptographically verifies that a test file content matches its sealed hash.
+   * Cryptographically verifies that a test file content matches its sealed HMAC & hash in constant time (QUAL-19).
    */
   verifyIntegrity(relativePath, currentContent) {
+    if (!this.sealSecret) {
+      return { verified: false, reason: 'Fail-closed: ImmutableTestVault sealSecret is missing.' };
+    }
     const sealed = this.sealedTests.get(relativePath);
     if (!sealed) return { verified: true, unmanaged: true };
 
     const currentHash = createHash('sha256').update(currentContent).digest('hex');
-    const matches = currentHash === sealed.sha256Hash;
+    const expectedHmac = createHmac('sha256', this.sealSecret)
+      .update(`${relativePath}\0${currentContent}`)
+      .digest('hex');
+
+    const a = Buffer.from(expectedHmac, 'utf8');
+    const b = Buffer.from(sealed.hmacSignature || '', 'utf8');
+    let matches = false;
+    if (a.length !== b.length) {
+      timingSafeEqual(a, a);
+    } else {
+      matches = timingSafeEqual(a, b);
+    }
 
     return {
       verified: matches,

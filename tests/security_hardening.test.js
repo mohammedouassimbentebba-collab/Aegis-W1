@@ -14,6 +14,12 @@ import { CrownJewelWebPortal } from '../src/target_app/crown_jewel_portal.js';
 import { HermeticWorkTent } from '../src/enclave/hermetic_work_tent.js';
 import { AirDefenseInterceptor } from '../src/defense_grid/air_defense_interceptor.js';
 import { OSFirewallShield } from '../src/perimeter/os_firewall_shield.js';
+import { AgentHarnessAdapter } from '../src/ai_testbed/agent_harness_adapter.js';
+import { AntiEscapeWatchdog } from '../src/enclave/anti_escape_watchdog.js';
+import { EvaluationGraderVault } from '../src/ai_testbed/evaluation_grader_vault.js';
+import { ImmutableTestVault } from '../src/enclave/immutable_test_vault.js';
+import fs from 'node:fs';
+import os from 'node:os';
 
 describe('W1™ Critical Security Hardening & Vulnerability Remediation Suite', () => {
 
@@ -543,11 +549,12 @@ describe('Batch 1 Red-Team Regression Suite (SEC-01, SEC-02, SEC-03, SEC-04, SEC
       // IFF Replay attack must be blocked
       const reg = b1.registerFriendlyAgent('allied_01');
       const nonce = 'unique_nonce_001';
-      const sig = createHmac('sha256', reg.token).update(nonce).digest('hex');
-      const first = b1.interceptAction('allied_01', { toolName: 'query_knowledge_base', iffProof: { nonce, signature: sig } });
+      const issuedAt = Date.now();
+      const sig = b1.computeIffSignature(reg.token, nonce, issuedAt);
+      const first = b1.interceptAction('allied_01', { toolName: 'query_knowledge_base', iffProof: { nonce, issuedAt, signature: sig } });
       assert.strictEqual(first.intercepted, false);
 
-      const replay = b1.interceptAction('allied_01', { toolName: 'query_knowledge_base', iffProof: { nonce, signature: sig } });
+      const replay = b1.interceptAction('allied_01', { toolName: 'query_knowledge_base', iffProof: { nonce, issuedAt, signature: sig } });
       assert.strictEqual(replay.intercepted, true, 'Replayed IFF proof must be intercepted');
       assert.ok(replay.reason.includes('replay'));
 
@@ -575,5 +582,217 @@ describe('Batch 1 Red-Team Regression Suite (SEC-01, SEC-02, SEC-03, SEC-04, SEC
     } finally {
       if (prevIff !== undefined) process.env.W1_IFF_SECRET = prevIff;
     }
+  });
+});
+
+describe('Batch 2 Red-Team Regression Suite (SEC-09, SEC-11, SEC-12, QUAL-19)', () => {
+
+  it('SEC-09 Red-Team: AgentHarnessAdapter must NOT mint capability tokens for tools/paths outside sessionPolicy', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'w1_sec09_'));
+    try {
+      const tent = new HermeticWorkTent({
+        agentId: 'policy_agent',
+        tentRoot: tmp,
+        allowedTools: ['READ_FILE', 'WRITE_FILE', 'RUN_IN_TENT_SCRIPT', 'SUBMIT_ESCALATION_TICKET']
+      });
+      const adapter = new AgentHarnessAdapter({
+        tent,
+        agentId: 'policy_agent',
+        sessionPolicy: {
+          allowedActions: ['READ_FILE'], // WRITE_FILE and RUN_IN_TENT_SCRIPT NOT pre-authorized
+          allowedPathPrefix: tmp
+        }
+      });
+
+      const res = await adapter.processModelOutput({
+        tool_calls: [
+          {
+            id: 'call_unauth_write',
+            function: {
+              name: 'write_file',
+              arguments: { path: path.join(tmp, 'evil.js'), content: 'pwn()' }
+            }
+          }
+        ]
+      });
+
+      const inner = JSON.parse(res.messages[0].content);
+      assert.strictEqual(inner.success, false);
+      assert.strictEqual(inner.blockedBySessionPolicy, true);
+      assert.strictEqual(inner.escalated, true);
+      assert.strictEqual(tent.tentLedger.filter(e => e.action === 'WRITE_FILE').length, 0, 'Unapproved action must not execute');
+      assert.strictEqual(tent.activeEscalationTickets.size, 1, 'Must escalate via handleRoadblock');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('SEC-11 Red-Team: CapabilityTokenManager and AirDefenseInterceptor must never evict live nonces when saturated (fail-closed)', () => {
+    const mgr = new CapabilityTokenManager(null, { suppressKeyWarning: true, maxConsumedEntries: 2 });
+    const t1 = mgr.issueToken({ agentId: 'a', allowedAction: 'READ', allowedResource: '*', ttlSeconds: 60 });
+    const t2 = mgr.issueToken({ agentId: 'a', allowedAction: 'READ', allowedResource: '*', ttlSeconds: 60 });
+    const t3 = mgr.issueToken({ agentId: 'a', allowedAction: 'READ', allowedResource: '*', ttlSeconds: 60 });
+
+    assert.strictEqual(mgr.verifyToken(t1, 'READ', '*').valid, true);
+    assert.strictEqual(mgr.verifyToken(t2, 'READ', '*').valid, true);
+
+    // Cache is now full of live (unexpired) nonces: t3 must be refused fail-closed, AND t1 must still be rejected as replayed
+    const t3Res = mgr.verifyToken(t3, 'READ', '*');
+    assert.strictEqual(t3Res.valid, false);
+    assert.ok(t3Res.reason.includes('saturated'));
+    assert.strictEqual(mgr.verifyToken(t1, 'READ', '*').valid, false, 'Live nonce t1 must never be evicted');
+
+    // Same fail-closed backpressure on AirDefenseInterceptor.usedIffNonces
+    const battery = new AirDefenseInterceptor({ maxIffNonces: 1 });
+    const reg = battery.registerFriendlyAgent('drone_1');
+    const ts = Date.now();
+    const sig1 = battery.computeIffSignature(reg.token, 'n1', ts);
+    const sig2 = battery.computeIffSignature(reg.token, 'n2', ts);
+
+    assert.strictEqual(battery.verifyAgentIFF('drone_1', { nonce: 'n1', issuedAt: ts, signature: sig1 }).isFriend, true);
+    const sat = battery.verifyAgentIFF('drone_1', { nonce: 'n2', issuedAt: ts, signature: sig2 });
+    assert.strictEqual(sat.isFriend, false);
+    assert.strictEqual(sat.status, 'IFF_NONCE_CACHE_SATURATED');
+  });
+
+  it('SEC-11 Pre-Commit DoS Check: flooding with forged signatures must NEVER pollute nonce caches or trigger backpressure', () => {
+    // 1. CapabilityTokenManager: capacity = 2, flood 25 forged tokens -> cache stays 0, valid token still succeeds
+    const mgr = new CapabilityTokenManager('strong_test_secret_key', { suppressKeyWarning: true, maxConsumedEntries: 2 });
+    for (let i = 0; i < 25; i++) {
+      const forged = {
+        tokenId: `forged-${i}`,
+        agentId: 'attacker',
+        allowedAction: 'READ',
+        allowedResource: '*',
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 60000,
+        singleUse: true,
+        signature: `deadbeef_${i}`
+      };
+      const res = mgr.verifyToken(forged, 'READ', '*');
+      assert.strictEqual(res.valid, false);
+    }
+    assert.strictEqual(mgr.consumedTokens.size, 0, 'Forged tokens must never enter consumedTokens');
+
+    const legitimate = mgr.issueToken({ agentId: 'honest', allowedAction: 'READ', allowedResource: '*' });
+    assert.strictEqual(mgr.verifyToken(legitimate, 'READ', '*').valid, true, 'Valid token must not be blocked by forged flood');
+
+    // 2. AirDefenseInterceptor: maxIffNonces = 2, flood 25 invalid IFF proofs -> cache stays 0, valid proof still succeeds
+    const battery = new AirDefenseInterceptor({ maxIffNonces: 2 });
+    const reg = battery.registerFriendlyAgent('allied_scout');
+    const now = Date.now();
+    for (let i = 0; i < 25; i++) {
+      const bad = battery.verifyAgentIFF('allied_scout', {
+        nonce: `forged_nonce_${i}`,
+        issuedAt: now,
+        signature: 'bad_sig_0000'
+      });
+      assert.strictEqual(bad.isFriend, false);
+      assert.strictEqual(bad.status, 'IFF_SPOOFING_DETECTED');
+    }
+    assert.strictEqual(battery.usedIffNonces.size, 0, 'Forged IFF proofs must never enter usedIffNonces');
+
+    const validSig = battery.computeIffSignature(reg.token, 'real_nonce_1', now);
+    assert.strictEqual(
+      battery.verifyAgentIFF('allied_scout', { nonce: 'real_nonce_1', issuedAt: now, signature: validSig }).isFriend,
+      true
+    );
+  });
+
+  it('SEC-12 Red-Team: AntiEscapeWatchdog must fail-closed without tentRoot and block new files inside symlinked directories', () => {
+    const unconfigured = new AntiEscapeWatchdog();
+    const noRootRes = unconfigured.validatePathContainment('agent_x', 'anything.txt');
+    assert.strictEqual(noRootRes.contained, false);
+    assert.strictEqual(noRootRes.violationType, 'TENT_ROOT_UNCONFIGURED');
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'w1_sec12_'));
+    const tentDir = path.join(tmp, 'tent');
+    const siblingEvilDir = path.join(tmp, 'tent_evil');
+    const outsideDir = path.join(tmp, 'outside');
+    fs.mkdirSync(tentDir, { recursive: true });
+    fs.mkdirSync(siblingEvilDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+
+    const watchdog = new AntiEscapeWatchdog({ tentRoot: tentDir });
+
+    // 1. Sibling directory prefix collision check ("tent_evil" must NOT match "tent")
+    const siblingRes = watchdog.validatePathContainment('agent_x', path.join(siblingEvilDir, 'secret.txt'));
+    assert.strictEqual(siblingRes.contained, false, 'Sibling prefix directory tent_evil must be blocked');
+    assert.strictEqual(siblingRes.violationType, 'PATH_JAIL_ESCAPE_ATTEMPT');
+
+    // 2. Symlink directory + Dangling symlink check via lstatSync
+    const linkDir = path.join(tentDir, 'link_out');
+    const danglingLink = path.join(tentDir, 'dangling_out');
+    let symlinkCreated = false;
+    let danglingCreated = false;
+    try {
+      fs.symlinkSync(outsideDir, linkDir, 'junction');
+      symlinkCreated = true;
+    } catch {
+      // Symlink creation may require privileges on some Windows setups
+    }
+    try {
+      fs.symlinkSync(path.join(outsideDir, 'nonexistent_target.txt'), danglingLink, 'file');
+      danglingCreated = true;
+    } catch {
+      // File symlink creation on Windows may require Developer Mode / elevation
+    }
+
+    try {
+      if (symlinkCreated) {
+        const newFileViaSymlink = path.join(linkDir, 'brand_new_secret.txt');
+        const check = watchdog.validatePathContainment('agent_x', newFileViaSymlink);
+        assert.strictEqual(check.contained, false, 'New file inside symlinked dir escaping tent must be blocked');
+        assert.strictEqual(check.violationType, 'SYMLINK_JAILBREAK_ATTEMPT');
+      }
+      if (danglingCreated) {
+        const danglingCheck = watchdog.validatePathContainment('agent_x', danglingLink);
+        assert.strictEqual(danglingCheck.contained, false, 'Dangling symlink pointing outside tent must be rejected');
+        assert.strictEqual(danglingCheck.violationType, 'SYMLINK_JAILBREAK_ATTEMPT');
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('QUAL-19 Regression: package.json with normal test script must NOT trigger false positive, and EvaluationGraderVault attestation must use keyed HMAC', async () => {
+    const vault = new ImmutableTestVault();
+    const normalPkg = JSON.stringify({ name: 'ok', scripts: { test: 'node --test tests/*.test.js' } });
+    assert.strictEqual(vault.isTamperingAttempt('package.json', normalPkg), false, 'Normal package.json must be allowed');
+    assert.strictEqual(vault.isTamperingAttempt('package.json', '{"scripts":{"test":"node --test"}'), false, 'Malformed JSON with real test command must not false-positive');
+    assert.strictEqual(vault.isTamperingAttempt('package.json', '{"scripts":{"test":"exit 0"}}'), true);
+
+    vault.sealTestFile('tests/unit.test.js', 'assert(true);');
+    assert.strictEqual(vault.verifyIntegrity('tests/unit.test.js', 'assert(true);').verified, true);
+    assert.strictEqual(vault.verifyIntegrity('tests/unit.test.js', 'assert(false);').verified, false);
+
+    // Fail-closed strict key mode when env vars are absent
+    const prevGraderKey = process.env.W1_GRADER_HMAC_KEY;
+    const prevVaultKey = process.env.W1_VAULT_HMAC_KEY;
+    delete process.env.W1_GRADER_HMAC_KEY;
+    delete process.env.W1_VAULT_HMAC_KEY;
+    try {
+      const strictVault = new ImmutableTestVault({ strictKeyRequired: true });
+      assert.throws(() => strictVault.sealTestFile('a.test.js', 'x'), /Fail-closed/);
+      assert.strictEqual(strictVault.verifyIntegrity('a.test.js', 'x').verified, false);
+
+      const strictGrader = new EvaluationGraderVault({ strictKeyRequired: true });
+      strictGrader.registerEvaluationTask('t1', { hiddenAssertions: ['solve'] });
+      const failReport = await strictGrader.gradeTask('t1', 'a1', { 'app.js': 'function solve(){}' });
+      assert.strictEqual(failReport.passed, false);
+      assert.strictEqual(strictGrader.verifyAttestation(failReport), false);
+    } finally {
+      if (prevGraderKey !== undefined) process.env.W1_GRADER_HMAC_KEY = prevGraderKey;
+      if (prevVaultKey !== undefined) process.env.W1_VAULT_HMAC_KEY = prevVaultKey;
+    }
+
+    const grader = new EvaluationGraderVault({ attestationSecret: 'grader_hmac_secret_123' });
+    assert.strictEqual(grader.auditAgentWorkspace('a1', { 'package.json': normalPkg }).clean, true);
+
+    grader.registerEvaluationTask('t1', { hiddenAssertions: ['solve'] });
+    const report = await grader.gradeTask('t1', 'a1', { 'app.js': 'function solve(){}' });
+    assert.strictEqual(grader.verifyAttestation(report), true);
+    assert.strictEqual(grader.verifyAttestation({ ...report, score: 0.99 }), false, 'Tampered scorecard must fail HMAC verification');
+    assert.strictEqual(grader.verifyAttestation({ ...report, cryptographicAttestation: 'short' }), false, 'Mismatched length attestation must fail safely');
   });
 });

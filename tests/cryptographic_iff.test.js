@@ -9,12 +9,13 @@ describe('Cryptographic IFF & Fail-Closed Anti-Interception Triad', () => {
     const reg = battery.registerFriendlyAgent('allied_drone_01', ['recon', 'surveillance']);
 
     const nonce = 'challenge_nonce_12345';
-    const signature = createHmac('sha256', reg.token).update(nonce).digest('hex');
+    const issuedAt = Date.now();
+    const signature = battery.computeIffSignature(reg.token, nonce, issuedAt);
 
     const proposal = {
       actionType: 'TOOL_CALL',
       toolName: 'query_knowledge_base',
-      iffProof: { nonce, signature }
+      iffProof: { nonce, issuedAt, signature }
     };
 
     const result = battery.interceptAction('allied_drone_01', proposal);
@@ -43,7 +44,7 @@ describe('Cryptographic IFF & Fail-Closed Anti-Interception Triad', () => {
     const proposal = {
       actionType: 'TOOL_CALL',
       toolName: 'query_knowledge_base',
-      iffProof: { nonce: 'nonce_999', signature: 'bad_forged_sig_deadbeef' }
+      iffProof: { nonce: 'nonce_999', issuedAt: Date.now(), signature: 'bad_forged_sig_deadbeef' }
     };
 
     const result = battery.interceptAction('friendly_vessel', proposal);

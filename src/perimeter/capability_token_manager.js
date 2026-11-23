@@ -19,11 +19,6 @@ import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
  */
 const MAX_CONSUMED_ENTRIES = 10000;
 
-/**
- * Pruning batch size — remove this many oldest expired entries per prune cycle.
- */
-const PRUNE_BATCH_SIZE = 1000;
-
 export class CapabilityTokenManager {
   /**
    * @param {string|null} secretKey - HMAC-SHA256 signing key. If null, reads
@@ -54,6 +49,8 @@ export class CapabilityTokenManager {
 
     // Map<tokenId, expiresAt> — enables pruning of expired entries
     this.consumedTokens = new Map();
+
+    this.maxConsumedEntries = options.maxConsumedEntries || MAX_CONSUMED_ENTRIES;
 
     this.enforceSingleUseByDefault = options.enforceSingleUse !== undefined
       ? options.enforceSingleUse
@@ -172,11 +169,19 @@ export class CapabilityTokenManager {
       return { valid: false, reason: `Resource scope mismatch: token allows '${token.allowedResource}', requested '${requestedResource}'` };
     }
 
-    // 6. Mark token as consumed if single-use
+    // 6. Mark token as consumed if single-use (SEC-11: never evict live nonces; fail-closed backpressure)
     const shouldConsume = consume && (token.singleUse !== false);
     if (shouldConsume) {
+      if (this.consumedTokens.size >= this.maxConsumedEntries) {
+        this._pruneExpiredConsumed();
+      }
+      if (this.consumedTokens.size >= this.maxConsumedEntries) {
+        return {
+          valid: false,
+          reason: 'Nonce replay cache saturated with live entries; refusing single-use verification (fail-closed backpressure)'
+        };
+      }
       this.consumedTokens.set(token.tokenId, token.expiresAt);
-      this._pruneConsumedIfNeeded();
     }
 
     return { valid: true };
@@ -251,34 +256,15 @@ export class CapabilityTokenManager {
   }
 
   /**
-   * Prunes expired consumed-token entries when the map exceeds MAX_CONSUMED_ENTRIES.
-   * Uses a batch eviction strategy to amortize pruning cost.
+   * Removes ONLY expired nonces. A consumed nonce whose token has not yet expired
+   * is never evicted, because evicting it would re-enable replay of a still-valid token.
+   * Expired tokens are rejected independently by the expiresAt check, so dropping them is safe.
    * @private
    */
-  _pruneConsumedIfNeeded() {
-    if (this.consumedTokens.size <= MAX_CONSUMED_ENTRIES) {
-      return;
-    }
-
+  _pruneExpiredConsumed() {
     const now = Date.now();
-    let pruned = 0;
-
     for (const [tokenId, expiresAt] of this.consumedTokens) {
-      if (expiresAt < now) {
-        this.consumedTokens.delete(tokenId);
-        pruned++;
-        if (pruned >= PRUNE_BATCH_SIZE) break;
-      }
-    }
-
-    // If nothing was pruned (all still valid), evict oldest entries by insertion order
-    if (pruned === 0 && this.consumedTokens.size > MAX_CONSUMED_ENTRIES) {
-      let evicted = 0;
-      for (const tokenId of this.consumedTokens.keys()) {
-        this.consumedTokens.delete(tokenId);
-        evicted++;
-        if (evicted >= PRUNE_BATCH_SIZE) break;
-      }
+      if (expiresAt < now) this.consumedTokens.delete(tokenId);
     }
   }
 }

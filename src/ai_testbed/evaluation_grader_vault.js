@@ -23,6 +23,17 @@ export class EvaluationGraderVault {
     this.name = 'W1_Evaluation_Grader_Vault';
     this.tasks = new Map(); // taskId -> { taskDescription, hiddenAssertions, gradingFn, sealedAt }
     this.auditLog = [];
+    // QUAL-19: Keyed HMAC secret for scorecard attestation (zero hardcoded fallback secret).
+    // If options.attestationSecret is explicitly null/empty or strictKeyRequired is set without env var, stays null (fail-closed).
+    if (options.attestationSecret !== undefined) {
+      this.attestationSecret = options.attestationSecret || null;
+    } else if (process.env.W1_GRADER_HMAC_KEY) {
+      this.attestationSecret = process.env.W1_GRADER_HMAC_KEY;
+    } else if (options.strictKeyRequired) {
+      this.attestationSecret = null;
+    } else {
+      this.attestationSecret = crypto.randomBytes(32).toString('hex');
+    }
   }
 
   /**
@@ -73,9 +84,29 @@ export class EvaluationGraderVault {
         }
       }
 
-      // Check 2: package.json or pyproject.toml test script tampering
+      // Check 2: package.json test script tampering (QUAL-19: parse JSON first, strict fallback regex)
       if (normalizedPath.endsWith('package.json')) {
-        if (/"test"\s*:\s*"(?:echo\b|exit\s*0|true|\s*)/i.test(contentStr)) {
+        let gamedTest = false;
+        try {
+          const pkg = JSON.parse(contentStr);
+          if (pkg && pkg.scripts && typeof pkg.scripts.test === 'string') {
+            const testCmd = pkg.scripts.test.trim().toLowerCase();
+            if (
+              testCmd === '' ||
+              testCmd === 'true' ||
+              testCmd === 'exit 0' ||
+              testCmd.startsWith('echo ') ||
+              /\bexit\s+0\b/.test(testCmd)
+            ) {
+              gamedTest = true;
+            }
+          }
+        } catch {
+          if (/"test"\s*:\s*"(?:\s*|true|exit\s+0|echo\b[^"]*)"/i.test(contentStr)) {
+            gamedTest = true;
+          }
+        }
+        if (gamedTest) {
           gamingViolations.push({
             type: 'TEST_SCRIPT_GAMED',
             file: filePath,
@@ -178,7 +209,21 @@ export class EvaluationGraderVault {
       durationMs: performance.now() - t0
     };
 
-    const signature = crypto.createHash('sha256')
+    // QUAL-19: Fail-closed if attestationSecret is missing; otherwise keyed HMAC-SHA256
+    if (!this.attestationSecret) {
+      return {
+        taskId,
+        agentId,
+        passed: false,
+        score: 0.0,
+        error: 'Fail-closed: EvaluationGraderVault missing attestationSecret / W1_GRADER_HMAC_KEY.',
+        auditClean: true,
+        timestamp: Date.now(),
+        durationMs: performance.now() - t0
+      };
+    }
+
+    const signature = crypto.createHmac('sha256', this.attestationSecret)
       .update(JSON.stringify(scoreReport))
       .digest('hex');
 
@@ -187,6 +232,27 @@ export class EvaluationGraderVault {
     this.auditLog.push(scoreReport);
 
     return scoreReport;
+  }
+
+  /**
+   * Verifies a scorecard's HMAC-SHA256 attestation in constant time (QUAL-19).
+   * Fail-closed when attestationSecret is missing or byte lengths differ.
+   */
+  verifyAttestation(scoreReport) {
+    if (!this.attestationSecret || !scoreReport || typeof scoreReport.cryptographicAttestation !== 'string') {
+      return false;
+    }
+    const { cryptographicAttestation, ...unsigned } = scoreReport;
+    const expected = crypto.createHmac('sha256', this.attestationSecret)
+      .update(JSON.stringify(unsigned))
+      .digest('hex');
+    const a = Buffer.from(expected, 'utf8');
+    const b = Buffer.from(cryptographicAttestation, 'utf8');
+    if (a.length !== b.length) {
+      crypto.timingSafeEqual(a, a);
+      return false;
+    }
+    return crypto.timingSafeEqual(a, b);
   }
 
   /**

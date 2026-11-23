@@ -105,21 +105,57 @@ export class AntiEscapeWatchdog {
   }
 
   /**
-   * Path Jail Boundary Check
-   * Guarantees that any path touched by the agent is strictly inside tentRoot.
+   * Helper: strict directory-separator containment check (SEC-12).
+   * Prevents sibling-directory prefix collisions (e.g. "tent" vs "tent_evil").
+   * @private
+   */
+  _isPathWithinRoot(targetPath, rootPath) {
+    const normRoot = path.resolve(rootPath);
+    const normTarget = path.resolve(targetPath);
+    const cmpRoot = process.platform === 'win32' ? normRoot.toLowerCase() : normRoot;
+    const cmpTarget = process.platform === 'win32' ? normTarget.toLowerCase() : normTarget;
+    const rootWithSep = cmpRoot.endsWith(path.sep) ? cmpRoot : cmpRoot + path.sep;
+    return cmpTarget === cmpRoot || cmpTarget.startsWith(rootWithSep);
+  }
+
+  /**
+   * Path Jail Boundary Check (SEC-12: Fail-Closed, Separator Boundary & Dangling Symlink Check)
+   * Guarantees that any path touched by the agent is strictly inside tentRoot,
+   * even for sibling-prefix names, dangling symlinks, or new files inside symlinked directories.
    */
   validatePathContainment(agentId, targetPath) {
     if (!this.tentRoot) {
-      return { contained: true }; // No tent set yet
+      return {
+        contained: false,
+        violationType: 'TENT_ROOT_UNCONFIGURED',
+        reason: 'Fail-closed: AntiEscapeWatchdog has no tentRoot configured; path access denied.'
+      };
     }
 
-    const resolved = path.resolve(this.tentRoot, targetPath);
-    const relative = path.relative(this.tentRoot, resolved);
+    if (!targetPath || typeof targetPath !== 'string' || targetPath.includes('\0')) {
+      return {
+        contained: false,
+        violationType: 'PATH_JAIL_ESCAPE_ATTEMPT',
+        reason: 'Invalid or null-byte target path rejected.'
+      };
+    }
 
-    // If relative starts with '..' or is absolute outside root, it has escaped the tent!
-    const isEscaped = relative.startsWith('..') || path.isAbsolute(relative);
+    const normalizedRoot = path.resolve(this.tentRoot);
+    let realTentRoot;
+    try {
+      realTentRoot = fs.existsSync(normalizedRoot) ? fs.realpathSync(normalizedRoot) : normalizedRoot;
+    } catch (err) {
+      return {
+        contained: false,
+        violationType: 'PATH_RESOLUTION_FAILURE',
+        reason: `Fail-closed: Cannot resolve tentRoot '${this.tentRoot}': ${err.message}`
+      };
+    }
 
-    if (isEscaped) {
+    const resolved = path.resolve(normalizedRoot, targetPath);
+
+    // 1. Strict lexical boundary check with directory separator (blocks ../ and tent_evil sibling bypass)
+    if (!this._isPathWithinRoot(resolved, normalizedRoot)) {
       const threat = new ThreatDetectionEvent({
         domain: ThreatDomain.AIR_DEFENSE,
         severity: ThreatSeverity.CRITICAL,
@@ -129,7 +165,7 @@ export class AntiEscapeWatchdog {
         telemetry: {
           attemptedPath: targetPath,
           resolvedPath: resolved,
-          tentRoot: this.tentRoot
+          tentRoot: normalizedRoot
         }
       });
 
@@ -143,38 +179,133 @@ export class AntiEscapeWatchdog {
       };
     }
 
-    // Physical Symlink Dereference Check (guards against symlink / hardlink escapes)
+    // 2. Physical Symlink & Dangling Symlink Check:
+    // Inspect resolved path and walk upward through every component inside tentRoot using lstatSync
+    // BEFORE falling back to nearest existing ancestor, so dangling symlinks are always caught.
     try {
-      if (fs.existsSync(resolved)) {
-        const realPhysical = fs.realpathSync(resolved);
-        const realRel = path.relative(this.tentRoot, realPhysical);
-        if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
-          const threat = new ThreatDetectionEvent({
-            domain: ThreatDomain.AIR_DEFENSE,
-            severity: ThreatSeverity.CRITICAL,
-            sourceAgentId: agentId,
-            description: `Anti-Escape Watchdog: Symlink jailbreak dereferencing to physical path '${realPhysical}' outside tent root.`,
-            confidence: 1.0,
-            telemetry: {
-              attemptedPath: targetPath,
-              resolvedPath: resolved,
-              physicalTarget: realPhysical,
-              tentRoot: this.tentRoot
-            }
-          });
-
-          this.logIncident(agentId, 'SYMLINK_JAILBREAK_ATTEMPT', { targetPath, realPhysical });
-
+      let probe = resolved;
+      while (true) {
+        let stat = null;
+        try {
+          stat = fs.lstatSync(probe);
+        } catch (lstatErr) {
+          if (lstatErr && lstatErr.code === 'ENOENT') {
+            if (probe === normalizedRoot) break;
+            const parent = path.dirname(probe);
+            if (parent === probe) break;
+            probe = parent;
+            continue;
+          }
+          // Any non-ENOENT error (e.g. ELOOP, EACCES) must fail-closed
           return {
             contained: false,
-            violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
-            reason: `Physical boundary violation: Symlink '${targetPath}' dereferences to physical path '${realPhysical}' outside the assigned work tent.`,
-            threat
+            violationType: 'PATH_RESOLUTION_FAILURE',
+            reason: `Fail-closed: lstat failed on '${probe}': ${lstatErr.message}`
           };
         }
+
+        if (stat.isSymbolicLink()) {
+          const rawLink = fs.readlinkSync(probe);
+          const linkResolved = path.resolve(path.dirname(probe), rawLink);
+          const insideLexical = this._isPathWithinRoot(linkResolved, normalizedRoot) ||
+                                this._isPathWithinRoot(linkResolved, realTentRoot);
+
+          if (!insideLexical) {
+            const threat = new ThreatDetectionEvent({
+              domain: ThreatDomain.AIR_DEFENSE,
+              severity: ThreatSeverity.CRITICAL,
+              sourceAgentId: agentId,
+              description: `Anti-Escape Watchdog: Symlink/dangling symlink '${probe}' points to '${linkResolved}' outside tent root.`,
+              confidence: 1.0,
+              telemetry: {
+                attemptedPath: targetPath,
+                symlinkPath: probe,
+                symlinkTarget: linkResolved,
+                tentRoot: realTentRoot
+              }
+            });
+
+            this.logIncident(agentId, 'SYMLINK_JAILBREAK_ATTEMPT', { targetPath, symlinkTarget: linkResolved });
+
+            return {
+              contained: false,
+              violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
+              reason: `Physical boundary violation: Symlink '${targetPath}' points outside the assigned work tent ('${linkResolved}').`,
+              threat
+            };
+          }
+
+          // If target exists, verify realpath as well (defense against chained symlinks); if dangling (ENOENT), reject if unresolved
+          if (fs.existsSync(probe)) {
+            const realPhysical = fs.realpathSync(probe);
+            if (!this._isPathWithinRoot(realPhysical, realTentRoot)) {
+              const threat = new ThreatDetectionEvent({
+                domain: ThreatDomain.AIR_DEFENSE,
+                severity: ThreatSeverity.CRITICAL,
+                sourceAgentId: agentId,
+                description: `Anti-Escape Watchdog: Symlink jailbreak dereferencing to physical path '${realPhysical}' outside tent root.`,
+                confidence: 1.0,
+                telemetry: { attemptedPath: targetPath, physicalTarget: realPhysical, tentRoot: realTentRoot }
+              });
+              this.logIncident(agentId, 'SYMLINK_JAILBREAK_ATTEMPT', { targetPath, realPhysical });
+              return {
+                contained: false,
+                violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
+                reason: `Physical boundary violation: Symlink '${targetPath}' dereferences to physical path '${realPhysical}' outside the assigned work tent.`,
+                threat
+              };
+            }
+          } else {
+            // Dangling symlink even if target appears local or unresolvable -> fail-closed
+            const threat = new ThreatDetectionEvent({
+              domain: ThreatDomain.AIR_DEFENSE,
+              severity: ThreatSeverity.CRITICAL,
+              sourceAgentId: agentId,
+              description: `Anti-Escape Watchdog: Dangling symlink rejected at '${probe}' -> '${linkResolved}'.`,
+              confidence: 1.0,
+              telemetry: { attemptedPath: targetPath, symlinkPath: probe, symlinkTarget: linkResolved }
+            });
+            this.logIncident(agentId, 'SYMLINK_JAILBREAK_ATTEMPT', { targetPath, danglingTarget: linkResolved });
+            return {
+              contained: false,
+              violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
+              reason: `Physical boundary violation: Dangling symlink '${targetPath}' cannot be safely dereferenced.`,
+              threat
+            };
+          }
+        } else {
+          // Non-symlink existing ancestor: verify realpath stays inside realTentRoot
+          const realPhysical = fs.realpathSync(probe);
+          if (!this._isPathWithinRoot(realPhysical, realTentRoot)) {
+            const threat = new ThreatDetectionEvent({
+              domain: ThreatDomain.AIR_DEFENSE,
+              severity: ThreatSeverity.CRITICAL,
+              sourceAgentId: agentId,
+              description: `Anti-Escape Watchdog: Ancestor path '${probe}' resolves to '${realPhysical}' outside tent root.`,
+              confidence: 1.0,
+              telemetry: { attemptedPath: targetPath, checkedAncestor: probe, physicalTarget: realPhysical, tentRoot: realTentRoot }
+            });
+            this.logIncident(agentId, 'SYMLINK_JAILBREAK_ATTEMPT', { targetPath, realPhysical });
+            return {
+              contained: false,
+              violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
+              reason: `Physical boundary violation: Path '${targetPath}' resolves outside the assigned work tent ('${realPhysical}').`,
+              threat
+            };
+          }
+        }
+
+        if (probe === normalizedRoot) break;
+        const parent = path.dirname(probe);
+        if (parent === probe) break;
+        probe = parent;
       }
-    } catch {
-      // Inaccessible or non-existent path
+    } catch (err) {
+      return {
+        contained: false,
+        violationType: 'PATH_RESOLUTION_FAILURE',
+        reason: `Fail-closed: Physical path verification failed for '${targetPath}': ${err.message}`
+      };
     }
 
     return { contained: true, resolvedPath: resolved };
