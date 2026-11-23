@@ -61,6 +61,7 @@ export class AiTestbedGateway {
 
     // Maximum concurrent agents
     this.maxAgents = options.maxAgents || DEFAULT_MAX_AGENTS;
+    this.probeHandler = typeof options.probeHandler === 'function' ? options.probeHandler : null;
 
     // Supervisor authentication secret (required for escalation endpoint)
     this.supervisorSecret = options.supervisorSecret
@@ -179,6 +180,22 @@ export class AiTestbedGateway {
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    if (method === 'GET' && (pathname === '/healthz' || pathname === '/readyz')) {
+      res.setHeader('Cache-Control', 'no-store');
+      if (this.probeHandler) {
+        const probe = await this.probeHandler(pathname);
+        return this.sendJson(res, probe.statusCode, probe.body);
+      }
+      if (pathname === '/healthz') {
+        return this.sendJson(res, 200, { status: 'alive', service: 'w1-gateway' });
+      }
+      const ready = Boolean(this.containerEngine?.initialized && this.server?.listening);
+      return this.sendJson(res, ready ? 200 : 503, {
+        status: ready ? 'ready' : 'not_ready',
+        service: 'w1-gateway'
+      });
     }
 
     // 1. POST /v1/tools/execute

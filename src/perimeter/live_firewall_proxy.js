@@ -68,6 +68,7 @@ export class LiveAIFirewallProxy {
     this.rateLimitWindowMs = options.rateLimitWindowMs || RATE_LIMIT_WINDOW_MS;
     this.maxRateLimitEntries = options.maxRateLimitEntries || MAX_RATE_LIMIT_ENTRIES;
     this.maxLogEntries = options.maxLogEntries || MAX_LOG_ENTRIES;
+    this.probeHandler = typeof options.probeHandler === 'function' ? options.probeHandler : null;
     this.server = null;
     this.interceptedRequestsLog = [];
 
@@ -157,6 +158,34 @@ export class LiveAIFirewallProxy {
   }
 
   async handleIncomingRequest(req, res) {
+    if (req.method === 'GET') {
+      let pathname = '/';
+      try {
+        pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      } catch {
+        pathname = '/';
+      }
+      if (pathname === '/healthz' || pathname === '/readyz') {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Cache-Control', 'no-store');
+        let probe;
+        if (this.probeHandler) {
+          probe = await this.probeHandler(pathname);
+        } else if (pathname === '/healthz') {
+          probe = { statusCode: 200, body: { status: 'alive', service: 'w1-proxy' } };
+        } else {
+          const ready = Boolean(this.server?.listening);
+          probe = {
+            statusCode: ready ? 200 : 503,
+            body: { status: ready ? 'ready' : 'not_ready', service: 'w1-proxy' }
+          };
+        }
+        res.writeHead(probe.statusCode, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(probe.body));
+      }
+    }
+
     if (req.method !== 'POST') {
       res.writeHead(405, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Method Not Allowed' }));

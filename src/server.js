@@ -19,12 +19,30 @@ import { FortressCommander } from './orchestrator/fortress_commander.js';
 import { AiTestbedGateway } from './ai_testbed/ai_testbed_gateway.js';
 import { LiveAIFirewallProxy } from './perimeter/live_firewall_proxy.js';
 import { HermeticWorkTent } from './enclave/hermetic_work_tent.js';
+import { ContainerIsolationEngine } from './ai_testbed/container_isolation_engine.js';
+import { SiemExporter } from './audit/siem_exporter.js';
+
+function computeShannonEntropy(str) {
+  if (!str || str.length === 0) return 0;
+  const counts = new Map();
+  for (let i = 0; i < str.length; i++) {
+    counts.set(str[i], (counts.get(str[i]) || 0) + 1);
+  }
+  let entropy = 0;
+  for (const count of counts.values()) {
+    const p = count / str.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
 
 /**
  * Validates that a cryptographic secret provides at least 256 bits of material
- * (>= 64 hex chars for hex strings, or >= 32 raw UTF-8 bytes otherwise).
+ * (>= 64 hex chars for hex strings, or >= 32 raw UTF-8 bytes otherwise) AND
+ * exhibits genuine character diversity / Shannon entropy (rejects repeated chars
+ * like `0000...`, `aaaa...`, short cycles, and trivial sequential patterns).
  */
-function assertMinimumSecretStrength(name, secretValue) {
+export function assertMinimumSecretStrength(name, secretValue) {
   if (typeof secretValue !== 'string' || secretValue.length === 0) {
     throw new Error(
       `Fail-closed startup aborted: ${name} is missing or empty. ` +
@@ -37,6 +55,29 @@ function assertMinimumSecretStrength(name, secretValue) {
     throw new Error(
       `Fail-closed startup aborted: ${name} violates minimum 256-bit secret length ` +
       '(requires at least 32 bytes or 64 hex characters).'
+    );
+  }
+
+  const normalized = isHex ? secretValue.toLowerCase() : secretValue;
+  const distinctChars = new Set(normalized).size;
+  const entropy = computeShannonEntropy(normalized);
+  const doubled = normalized + normalized;
+  const shortestPeriod = doubled.indexOf(normalized, 1);
+  const isShortRepeatingCycle = shortestPeriod > 0 && shortestPeriod <= 16;
+
+  // Detect monotonic +/-1 stepping patterns (e.g., 0123456789abcdef0123...)
+  let monotonicSteps = 0;
+  for (let i = 0; i < normalized.length - 1; i++) {
+    if (Math.abs(normalized.charCodeAt(i + 1) - normalized.charCodeAt(i)) === 1) {
+      monotonicSteps++;
+    }
+  }
+  const monotonicRatio = normalized.length > 1 ? monotonicSteps / (normalized.length - 1) : 0;
+
+  if (distinctChars < 8 || entropy < 3.0 || isShortRepeatingCycle || monotonicRatio >= 0.7) {
+    throw new Error(
+      `Fail-closed startup aborted: ${name} fails minimum cryptographic entropy/diversity checks ` +
+      '(rejected repeated characters, periodic pattern, or sequential secret).'
     );
   }
 }
@@ -106,9 +147,29 @@ export async function startDefenseServer(options = {}) {
     suppressKeyWarning: Boolean(options.silent)
   });
 
+  const auditLogPath = options.auditLogPath !== undefined
+    ? options.auditLogPath
+    : (process.env.W1_AUDIT_LOG_PATH || null);
+  const siemWebhookUrl = options.siemWebhookUrl !== undefined
+    ? options.siemWebhookUrl
+    : (process.env.W1_SIEM_WEBHOOK_URL || null);
+
+  const siemExporter = options.siemExporter || (
+    (auditLogPath || siemWebhookUrl)
+      ? new SiemExporter({ logPath: auditLogPath, webhookUrl: siemWebhookUrl })
+      : null
+  );
+
+  const isolationEngine = options.isolationEngine || new ContainerIsolationEngine();
+  const isolationReadyPromise = options.deferRuntimeProbe
+    ? Promise.resolve(isolationEngine.verifyHostRuntimePrerequisites())
+    : isolationEngine.detectContainerRuntime();
+
   const commander = new FortressCommander({}, {
     tokenManager,
-    airDefenseOptions: { iffSecretKey: effectiveIffSecret }
+    airDefenseOptions: { iffSecretKey: effectiveIffSecret },
+    siemExporter,
+    onSecurityAuditEvent: options.onSecurityAuditEvent
   });
 
   const defaultTent = new HermeticWorkTent({
@@ -117,17 +178,51 @@ export async function startDefenseServer(options = {}) {
     supervisorSecret: effectiveSupervisorSecret
   });
 
-  const gateway = new AiTestbedGateway({
+  let gateway = null;
+  let proxy = null;
+
+  // Sanitized enterprise Kubernetes-style liveness/readiness probe responder (zero secret/path leakage)
+  const probeHandler = (pathname) => {
+    if (pathname === '/healthz') {
+      return {
+        statusCode: 200,
+        body: { status: 'alive', service: 'w1-defense' }
+      };
+    }
+
+    const isolationReady = Boolean(isolationEngine.initialized);
+    const gatewayReady = Boolean(gateway?.server?.listening);
+    const proxyReady = Boolean(proxy?.server?.listening);
+    const allReady = isolationReady && gatewayReady && proxyReady;
+
+    return {
+      statusCode: allReady ? 200 : 503,
+      body: {
+        status: allReady ? 'ready' : 'not_ready',
+        service: 'w1-defense',
+        checks: {
+          isolationEngine: isolationReady ? 'ready' : 'initializing',
+          gateway: gatewayReady ? 'ready' : 'starting',
+          proxy: proxyReady ? 'ready' : 'starting'
+        }
+      }
+    };
+  };
+
+  gateway = new AiTestbedGateway({
     host,
     port: gatewayPort,
     tent: defaultTent,
-    supervisorSecret: effectiveSupervisorSecret
+    containerEngine: isolationEngine,
+    supervisorSecret: effectiveSupervisorSecret,
+    probeHandler
   });
 
-  const proxy = new LiveAIFirewallProxy(commander, {
+  proxy = new LiveAIFirewallProxy(commander, {
     port: proxyPort,
     upstreamUrl,
-    requestTimeoutMs
+    requestTimeoutMs,
+    probeHandler
   });
 
   const gatewayInfo = await gateway.start();
@@ -146,7 +241,11 @@ export async function startDefenseServer(options = {}) {
   const stop = async () => {
     if (stopped) return;
     stopped = true;
-    await Promise.allSettled([gateway.stop(), proxy.stop()]);
+    await Promise.allSettled([
+      gateway.stop(),
+      proxy.stop(),
+      siemExporter ? siemExporter.flush() : Promise.resolve()
+    ]);
   };
 
   if (!options.silent) {
@@ -164,6 +263,9 @@ export async function startDefenseServer(options = {}) {
     proxy,
     commander,
     tokenManager,
+    isolationEngine,
+    isolationReadyPromise,
+    siemExporter,
     gatewayInfo,
     proxyInfo,
     stop

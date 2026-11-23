@@ -48,8 +48,11 @@ export class FortressCommander {
     this.nucleiScanner = options.nucleiScanner || new NucleiTemplateEngine(options.nucleiOptions);
     this.zeroDayDetector = options.zeroDayDetector || new ZeroDayDetector(options.zeroDayOptions);
     this.securityAuditLog = [];
-    this.maxSecurityAuditLogSize = options.maxSecurityAuditLogSize || 5000;
+    this.maxAuditLogEntries = Number(options.maxAuditLogEntries ?? options.maxSecurityAuditLogSize ?? 10000);
+    this.droppedAuditEvents = 0;
+    this.auditSinkErrors = 0;
     this.onSecurityAuditEvent = typeof options.onSecurityAuditEvent === 'function' ? options.onSecurityAuditEvent : null;
+    this.siemExporter = options.siemExporter || null;
 
     // Register Air Defense with Kernel for automated interception
     this.kernel.registerInterceptor(this.airDefense);
@@ -58,6 +61,7 @@ export class FortressCommander {
   /**
    * Emits a structured SOC/SIEM security audit event with SHA-256 content
    * fingerprint and zero raw sensitive payload leakage.
+   * Bounded ring-buffer & isolated sink error handling prevent pipeline disruption.
    */
   emitSecurityAuditEvent({
     layer,
@@ -85,14 +89,37 @@ export class FortressCommander {
       payloadSha256
     };
 
-    if (this.securityAuditLog.length >= this.maxSecurityAuditLogSize) {
-      this.securityAuditLog.shift();
+    if (this.maxAuditLogEntries > 0) {
+      while (this.securityAuditLog.length >= this.maxAuditLogEntries) {
+        this.securityAuditLog.shift();
+        this.droppedAuditEvents++;
+      }
+      this.securityAuditLog.push(event);
+    } else {
+      this.droppedAuditEvents++;
     }
-    this.securityAuditLog.push(event);
 
     if (this.onSecurityAuditEvent) {
-      this.onSecurityAuditEvent(event);
+      try {
+        const maybePromise = this.onSecurityAuditEvent(event);
+        if (maybePromise && typeof maybePromise.catch === 'function') {
+          maybePromise.catch(() => {
+            this.auditSinkErrors++;
+          });
+        }
+      } catch {
+        this.auditSinkErrors++;
+      }
     }
+
+    if (this.siemExporter && typeof this.siemExporter.exportEvent === 'function') {
+      try {
+        this.siemExporter.exportEvent(event);
+      } catch {
+        this.auditSinkErrors++;
+      }
+    }
+
     return event;
   }
 

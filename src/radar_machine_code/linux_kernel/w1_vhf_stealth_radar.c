@@ -71,6 +71,7 @@ static enum hrtimer_restart w1_prf_timer_callback(struct hrtimer *timer)
 {
     struct w1_radar_device *dev = container_of(timer, struct w1_radar_device, prf_timer);
     unsigned long flags;
+    ktime_t period;
 
     spin_lock_irqsave(&dev->lock, flags);
 
@@ -81,13 +82,14 @@ static enum hrtimer_restart w1_prf_timer_callback(struct hrtimer *timer)
 
     dev->telemetry.total_pulses_transmitted++;
     dev->telemetry.total_echoes_processed++;
+    period = dev->prf_period;
 
     /* In hardware: Trigger DMA scatter-gather read of antenna element ADC buffers */
 
     spin_unlock_irqrestore(&dev->lock, flags);
 
     /* Forward timer period for next radar pulse */
-    hrtimer_forward_now(timer, dev->prf_period);
+    hrtimer_forward_now(timer, period);
     return HRTIMER_RESTART;
 }
 
@@ -282,14 +284,21 @@ static int __init w1_radar_init(void)
 
     spin_lock_init(&radar_ctx->lock);
 
-    /* Set default configuration to VHF Metric Anti-Stealth Band (180 MHz, λ = 1.66 m) */
-    radar_ctx->current_config.frequency_band = W1_BAND_VHF_METRIC;
-    radar_ctx->current_config.carrier_freq_hz = 180000000;
-    radar_ctx->current_config.pulse_repetition_freq_hz = 1000;
-    radar_ctx->current_config.pulse_width_us = 50.0f;
-    radar_ctx->current_config.bandwidth_mhz = 10.0f;
-    radar_ctx->current_config.antenna_elements = 64;
-    radar_ctx->current_config.stap_enabled = 1;
+    /* Set default configuration to VHF Metric Anti-Stealth Band (180 MHz, λ = 1.66 m)
+     * Use IEEE-754 integer bit patterns to avoid SSE/FP instructions in kernel space.
+     */
+    {
+        static const u32 default_pulse_width_bits = 0x42480000U; /* 50.0f */
+        static const u32 default_bandwidth_bits   = 0x41200000U; /* 10.0f */
+
+        radar_ctx->current_config.frequency_band = W1_BAND_VHF_METRIC;
+        radar_ctx->current_config.carrier_freq_hz = 180000000;
+        radar_ctx->current_config.pulse_repetition_freq_hz = 1000;
+        memcpy(&radar_ctx->current_config.pulse_width_us, &default_pulse_width_bits, sizeof(u32));
+        memcpy(&radar_ctx->current_config.bandwidth_mhz, &default_bandwidth_bits, sizeof(u32));
+        radar_ctx->current_config.antenna_elements = 64;
+        radar_ctx->current_config.stap_enabled = 1;
+    }
 
     radar_ctx->prf_period = ktime_set(0, 1000000); /* 1 ms = 1000 Hz PRF */
     hrtimer_init(&radar_ctx->prf_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);

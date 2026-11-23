@@ -1,40 +1,64 @@
-name: W1™ Cognitive Defense Fortress CI
+name: W1 Safety Fortress CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+
+permissions:
+  contents: read
 
 jobs:
-  aerospace-verification:
-    name: DO-178C Level A Formal Verification & Kernel CI
+  unit-and-security-tests:
+    name: Node.js Test & Red-Team Suite
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Source Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js Environment
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '20'
 
-      - name: Run Deterministic Unit Tests (145/145 Verification Suite)
-        run: |
-          npm test
+      - name: Run full defense & security test suite
+        run: npm test
 
-      - name: Compile Native Linux C Kernel Controller
-        run: |
-          mkdir -p bin
-          gcc -O3 -Wall -Wextra src/radar_machine_code/linux_kernel/w1_radar_ctl.c -lm -o bin/w1_radar_ctl_linux
-          ls -lh bin/w1_radar_ctl_linux
+  kernel-module-and-systemd:
+    name: Linux Kernel Kbuild (-Werror) & systemd Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Execute Native Radar Telemetry & Stealth Tracking
-        run: |
-          ./bin/w1_radar_ctl_linux telemetry
-          ./bin/w1_radar_ctl_linux tracks
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: Run 100-Vector Comprehensive Cybersecurity Audit
+      - name: Install kernel headers, build toolchain, and systemd
         run: |
-          node simulation/comprehensive_cybersecurity_audit.js
+          sudo apt-get update
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential systemd kmod
+
+      - name: Build Ring-0 VHF/UHF Radar Kernel Module (Kbuild -Werror)
+        run: |
+          KDIR="/lib/modules/$(uname -r)/build"
+          MOD_DIR="$GITHUB_WORKSPACE/src/radar_machine_code/linux_kernel"
+          make -C "$KDIR" M="$MOD_DIR" KCFLAGS="-Werror" modules
+          test -f "$MOD_DIR/w1_vhf_radar.ko"
+          modinfo "$MOD_DIR/w1_vhf_radar.ko"
+          make -C "$KDIR" M="$MOD_DIR" clean
+
+      - name: Verify hardened non-root systemd unit
+        run: |
+          id -u w1defense >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin w1defense
+          sudo ln -sfn "$GITHUB_WORKSPACE" /opt/w1_defense
+          if [ ! -e /usr/bin/node ]; then
+            sudo ln -s "$(command -v node)" /usr/bin/node
+          fi
+          systemd-analyze verify "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
+          grep -Eq '^User=w1defense$' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
+          grep -Eq '^PrivateDevices=true$' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
+          ! grep -E '^[^#]*CAP_SYS_RAWIO' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"

@@ -221,9 +221,9 @@ describe('Batch 3 Hardening & Remediation Verification Suite (SYS-05, ARCH-15, O
       host: '127.0.0.1',
       gatewayPort: 0,
       proxyPort: 0,
-      capabilityHmacKey: 'a'.repeat(64),
-      supervisorSecret: 'b'.repeat(64),
-      iffSecret: 'c'.repeat(64),
+      capabilityHmacKey: '9f4c2e8a1b7d3056c8e4a2f1907b5d3e6a1c8f0427b9e3d5a1c7f2084b6e9d13',
+      supervisorSecret: '4e8a1c7d5f902b63a4c8e1d907f2b5a36e8c1d490f2a7b5c3e9d1084a6f2c7b5',
+      iffSecret: '7b3e9d104a8c5f26b9e1d407a3c8f2590e6b1d4a8c7f30259e4b1a6d8c0f3729',
       silent: true
     });
 
@@ -433,7 +433,7 @@ describe('Batch 3 Hardening & Remediation Verification Suite (SYS-05, ARCH-15, O
         gatewayPort: 0,
         proxyPort: 0,
         capabilityHmacKey: 'short-weak-key',
-        supervisorSecret: 'b'.repeat(64),
+        supervisorSecret: '4e8a1c7d5f902b63a4c8e1d907f2b5a36e8c1d490f2a7b5c3e9d1084a6f2c7b5',
         silent: true
       }),
       /minimum 256-bit secret length/
@@ -443,8 +443,8 @@ describe('Batch 3 Hardening & Remediation Verification Suite (SYS-05, ARCH-15, O
       () => startDefenseServer({
         gatewayPort: 0,
         proxyPort: 0,
-        capabilityHmacKey: 'a'.repeat(32),
-        supervisorSecret: 'b'.repeat(64),
+        capabilityHmacKey: '9f4c2e8a1b7d3056c8e4a2f1907b5d3e',
+        supervisorSecret: '4e8a1c7d5f902b63a4c8e1d907f2b5a36e8c1d490f2a7b5c3e9d1084a6f2c7b5',
         silent: true
       }),
       /minimum 256-bit secret length/
@@ -455,8 +455,8 @@ describe('Batch 3 Hardening & Remediation Verification Suite (SYS-05, ARCH-15, O
       host: '127.0.0.1',
       gatewayPort: 0,
       proxyPort: 0,
-      capabilityHmacKey: 'a'.repeat(64),
-      supervisorSecret: 'b'.repeat(64),
+      capabilityHmacKey: '9f4c2e8a1b7d3056c8e4a2f1907b5d3e6a1c8f0427b9e3d5a1c7f2084b6e9d13',
+      supervisorSecret: '4e8a1c7d5f902b63a4c8e1d907f2b5a36e8c1d490f2a7b5c3e9d1084a6f2c7b5',
       headersTimeoutMs: 7500,
       requestTimeoutMs: 15000,
       keepAliveTimeoutMs: 4000,
