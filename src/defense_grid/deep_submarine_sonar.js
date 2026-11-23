@@ -35,37 +35,109 @@ export class DeepSubmarineSonar {
   }
 
   /**
-   * Generates a dynamic, cryptographically rotated projection matrix V_t.
+   * Applies Modified Gram-Schmidt orthonormalization against any optional
+   * prior basis vectors, guaranteeing mutually orthogonal unit rows.
+   * @private
+   */
+  _orthonormalizeCandidateRows(candidates, d, k, orthogonalTo = []) {
+    const basis = [];
+    const eps = 1e-9;
+
+    const projectOut = (vec, orthoSet) => {
+      for (const u of orthoSet) {
+        let dot = 0.0;
+        for (let i = 0; i < d; i++) dot += vec[i] * u[i];
+        for (let i = 0; i < d; i++) vec[i] -= dot * u[i];
+      }
+    };
+
+    const normalize = (vec) => {
+      let normSq = 0.0;
+      for (let i = 0; i < d; i++) normSq += vec[i] * vec[i];
+      const norm = Math.sqrt(normSq);
+      if (norm < eps) return false;
+      for (let i = 0; i < d; i++) vec[i] /= norm;
+      return true;
+    };
+
+    for (let r = 0; r < candidates.length && basis.length < k; r++) {
+      const vec = Float64Array.from(candidates[r]);
+      projectOut(vec, orthogonalTo);
+      projectOut(vec, basis);
+      if (normalize(vec)) {
+        basis.push(vec);
+      }
+    }
+
+    // Deterministic canonical fallback if seeded rows were linearly dependent
+    for (let axis = 0; axis < d && basis.length < k; axis++) {
+      const e = new Float64Array(d);
+      e[axis] = 1.0;
+      projectOut(e, orthogonalTo);
+      projectOut(e, basis);
+      if (normalize(e)) {
+        basis.push(e);
+      }
+    }
+
+    return basis;
+  }
+
+  /**
+   * Generates a dynamic, cryptographically rotated orthonormal projection matrix V_t.
    * Moving Target Defense: Prevents sleeper agents from anticipating probe angles.
    * @param {string} kernelHash - Cryptographic hash from the immutable DAG root
    * @param {number} timestep
-   * @returns {Array<Array<number>>} k x d orthogonal projection matrix
+   * @param {number} [ensembleIndex=0]
+   * @param {Array<Float64Array>} [orthogonalTo=[]]
+   * @returns {Array<Float64Array>} k x d orthonormal projection matrix
    */
-  deriveDynamicBasis(kernelHash = 'genesis', timestep = 0) {
+  deriveDynamicBasis(kernelHash = 'genesis', timestep = 0, ensembleIndex = 0, orthogonalTo = []) {
+    const suffix = ensembleIndex === 0 ? 'sub_sonar_rotation' : `sub_sonar_rotation_ens_${ensembleIndex}`;
     const seed = createHash('sha256')
-      .update(`${kernelHash}:${timestep}:sub_sonar_rotation`)
+      .update(`${kernelHash}:${timestep}:${suffix}`)
       .digest();
 
     const d = this.baseDimension;
     const k = Math.max(2, Math.floor(d / 2));
-    const basis = [];
+    const candidates = [];
 
     for (let row = 0; row < k; row++) {
       const vec = new Float64Array(d);
-      let norm = 0;
       for (let col = 0; col < d; col++) {
-        const byteIdx = (row * d + col) % seed.length;
+        const byteIdx = (row * d + col + ensembleIndex * 7) % seed.length;
         // Pseudo-random Gaussian-like perturbation [-1.0, 1.0]
-        const val = ((seed[byteIdx] / 255.0) * 2.0) - 1.0;
-        vec[col] = val;
-        norm += val * val;
+        vec[col] = ((seed[byteIdx] / 255.0) * 2.0) - 1.0;
       }
-      norm = Math.sqrt(norm) || 1.0;
-      for (let col = 0; col < d; col++) vec[col] /= norm;
-      basis.push(vec);
+      candidates.push(vec);
     }
 
-    return basis;
+    return this._orthonormalizeCandidateRows(candidates, d, k, orthogonalTo);
+  }
+
+  /**
+   * Builds an ensemble of 4 independent cryptographically rotated orthonormal
+   * projection bases (including an exact orthogonal complement pair) so sleeper
+   * anomalies cannot slip into a single-basis null space at any timestep.
+   *
+   * @param {string} [kernelHash='genesis']
+   * @param {number} [timestep=0]
+   * @param {number} [ensembleSize=4]
+   * @returns {Array<Array<Float64Array>>}
+   */
+  deriveDynamicBasisEnsemble(kernelHash = 'genesis', timestep = 0, ensembleSize = 4) {
+    const count = Math.max(4, ensembleSize);
+    const ensemble = [];
+    const primaryBasis = this.deriveDynamicBasis(kernelHash, timestep, 0);
+    ensemble.push(primaryBasis);
+
+    // Index 1 spans the orthogonal complement subspace of primaryBasis, eliminating blind spots
+    ensemble.push(this.deriveDynamicBasis(kernelHash, timestep, 1, primaryBasis));
+
+    for (let m = 2; m < count; m++) {
+      ensemble.push(this.deriveDynamicBasis(kernelHash, timestep, m));
+    }
+    return ensemble;
   }
 
   /**
@@ -132,20 +204,24 @@ export class DeepSubmarineSonar {
       }
     }
 
-    // 2. Mathematical Latent Projection (SVD Moving Target Probing)
+    // 2. Multi-Basis Ensemble Latent Projection (4 rotated orthonormal subspaces)
     const d = this.baseDimension;
     const rawActivations = activationVector || this.synthesizeActivationVector(internalScratchpad, d);
-    const dynamicBasis = this.deriveDynamicBasis(kernelHash, timestep);
+    const ensembleBases = this.deriveDynamicBasisEnsemble(kernelHash, timestep, 4);
 
-    // Compute projection energy: || P * x ||^2
-    let projectedEnergy = 0.0;
-    for (const basisVec of dynamicBasis) {
-      let dot = 0.0;
-      for (let i = 0; i < d; i++) {
-        dot += basisVec[i] * (rawActivations[i] || 0.0);
+    // Evaluate projection energy || P_m * x ||^2 across all independent bases
+    const ensembleEnergies = ensembleBases.map((basis) => {
+      let energy = 0.0;
+      for (const basisVec of basis) {
+        let dot = 0.0;
+        for (let i = 0; i < d; i++) {
+          dot += basisVec[i] * (rawActivations[i] || 0.0);
+        }
+        energy += dot * dot;
       }
-      projectedEnergy += dot * dot;
-    }
+      return energy;
+    });
+    const projectedEnergy = Math.max(...ensembleEnergies);
 
     // High projected energy along rotated anomaly vectors flags sleeper agent activation
     const anomalyEnergyThreshold = this.anomalyEnergyThreshold;
@@ -158,17 +234,22 @@ export class DeepSubmarineSonar {
         confidence: Math.min(0.99, projectedEnergy / anomalyEnergyThreshold * 0.9),
         telemetry: {
           projectedEnergy,
+          ensembleEnergies,
+          ensembleSize: ensembleBases.length,
           threshold: anomalyEnergyThreshold,
-          probeType: 'DYNAMIC_ROTATED_SVD_PROJECTION'
+          probeType: 'MULTI_BASIS_ENSEMBLE_SVD_PROJECTION'
         }
       });
 
-      this.logSonarIncident(agentId, 'LATENT_PROJECTION_ENERGY_EXCEEDED', { projectedEnergy });
+      this.logSonarIncident(agentId, 'LATENT_PROJECTION_ENERGY_EXCEEDED', {
+        projectedEnergy,
+        ensembleEnergies
+      });
 
       return {
         aligned: false,
         deceptionDetected: true,
-        reason: `Submarine Sonar detected anomalous latent activation energy along cryptographically rotated probe basis.`,
+        reason: `Submarine Sonar detected anomalous latent activation energy along cryptographically rotated multi-basis ensemble.`,
         threatEvent
       };
     }
@@ -177,7 +258,8 @@ export class DeepSubmarineSonar {
       aligned: true,
       deceptionDetected: false,
       threatEvent: null,
-      projectedEnergy
+      projectedEnergy,
+      ensembleEnergies
     };
   }
 

@@ -20,7 +20,10 @@
  */
 
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export class ContainerIsolationEngine {
   constructor(options = {}) {
@@ -29,8 +32,62 @@ export class ContainerIsolationEngine {
     this.defaultMemoryLimit = options.memoryLimit || '2g';
     this.defaultPidsLimit = options.pidsLimit || 100;
 
-    // Detect runtime availability at construction time
-    this._runtimeInfo = this._detectContainerRuntime();
+    // PERF-20: Non-blocking construction — starts uninitialized (Fail-Closed)
+    // until async container runtime detection completes.
+    this.initialized = false;
+    this._runtimeInfo = {
+      available: false,
+      runtime: null,
+      version: null,
+      checked: false
+    };
+    this._runtimeProbePromise = null;
+
+    if (options.probeOnInit) {
+      this._runtimeProbePromise = this.detectContainerRuntime();
+    }
+  }
+
+  /**
+   * Fail-closed guard: refuses runtime execution before async runtime detection finishes.
+   */
+  assertInitialized() {
+    if (!this.initialized) {
+      throw new Error(
+        'Fail-closed: ContainerIsolationEngine is not initialized (initialized=false). ' +
+        'Await detectContainerRuntime() or verifyHostRuntimePrerequisitesAsync() before execution.'
+      );
+    }
+  }
+
+  /**
+   * Executes an isolated workload command only after runtime probing has completed
+   * and a verified host container runtime is available (Fail-Closed).
+   *
+   * @param {Object} params
+   * @param {string} params.agentId
+   * @param {string} params.image
+   * @param {string[]} [params.command=[]]
+   * @param {string} [params.tentRoot='./sandbox_tents']
+   */
+  async executeIsolatedContainer({ agentId = 'eval_agent_01', image = 'node:20-alpine', command = [], tentRoot = './sandbox_tents' } = {}) {
+    this.assertInitialized();
+
+    if (!this._runtimeInfo.available || !this._runtimeInfo.runtime) {
+      throw new Error(
+        `Fail-closed: Cannot execute isolated container for '${agentId}' — no container runtime available on host (mode: SIMULATION).`
+      );
+    }
+
+    const args = [
+      'run', '--rm', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
+      '--network=none', `--pids-limit=${this.defaultPidsLimit}`,
+      `--memory=${this.defaultMemoryLimit}`, `--cpus=${this.defaultCpuLimit}`,
+      '-v', `${path.resolve(tentRoot)}:/workspace/tent:rw`,
+      image,
+      ...command
+    ];
+    return execFileAsync(this._runtimeInfo.runtime, args, { encoding: 'utf8', timeout: 30000 });
   }
 
   /**
@@ -341,47 +398,76 @@ export class ContainerIsolationEngine {
   }
 
   /**
-   * Verifies that the host machine has a container runtime available.
-   * REMEDIATION: Allows callers to distinguish SIMULATION from PRODUCTION readiness.
+   * Returns cached host runtime status synchronously (non-blocking, PERF-20).
+   * Call `await verifyHostRuntimePrerequisitesAsync()` to perform a live probe.
    *
-   * @returns {{ available: boolean, runtime: string|null, version: string|null, mode: string }}
+   * @returns {{ available: boolean, runtime: string|null, version: string|null, checked: boolean, mode: string }}
    */
   verifyHostRuntimePrerequisites() {
     return {
       ...this._runtimeInfo,
+      initialized: this.initialized,
       mode: this._runtimeInfo.available ? 'PRODUCTION' : 'SIMULATION'
     };
   }
 
   /**
-   * Detects available container runtimes on the host.
-   * @private
+   * Asynchronously detects available container runtimes without blocking the event loop (PERF-20).
+   *
+   * @returns {Promise<{ available: boolean, runtime: string|null, version: string|null, checked: boolean, initialized: boolean, mode: string }>}
    */
-  _detectContainerRuntime() {
-    const runtimes = ['docker', 'podman', 'nerdctl'];
+  async verifyHostRuntimePrerequisitesAsync() {
+    if (!this._runtimeInfo.checked) {
+      await this.detectContainerRuntime();
+    }
+    return this.verifyHostRuntimePrerequisites();
+  }
 
-    for (const runtime of runtimes) {
-      try {
-        const version = execSync(`${runtime} --version`, {
-          encoding: 'utf8',
-          timeout: 5000,
-          stdio: ['pipe', 'pipe', 'pipe']
-        }).trim();
-
-        return {
-          available: true,
-          runtime,
-          version: version.split('\n')[0]
-        };
-      } catch {
-        // Runtime not found, try next
-      }
+  /**
+   * Non-blocking probe for container runtimes on the host using execFile (no shell).
+   */
+  async detectContainerRuntime() {
+    if (this._runtimeProbePromise) {
+      return this._runtimeProbePromise;
     }
 
-    return {
-      available: false,
-      runtime: null,
-      version: null
-    };
+    this._runtimeProbePromise = (async () => {
+      const runtimes = ['docker', 'podman', 'nerdctl'];
+
+      for (const runtime of runtimes) {
+        try {
+          const { stdout } = await execFileAsync(runtime, ['--version'], {
+            encoding: 'utf8',
+            timeout: 5000
+          });
+          const version = String(stdout || '').trim();
+          this._runtimeInfo = {
+            available: true,
+            runtime,
+            version: version.split('\n')[0],
+            checked: true
+          };
+          this.initialized = true;
+          return this._runtimeInfo;
+        } catch {
+          // Runtime not found, try next
+        }
+      }
+
+      this._runtimeInfo = {
+        available: false,
+        runtime: null,
+        version: null,
+        checked: true
+      };
+      this.initialized = true;
+      return this._runtimeInfo;
+    })();
+
+    try {
+      return await this._runtimeProbePromise;
+    } finally {
+      this._runtimeProbePromise = null;
+    }
   }
 }

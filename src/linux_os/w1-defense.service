@@ -1,28 +1,35 @@
 [Unit]
-Description=W1™ Aerospace AI Defense Fortress Daemon & Hardware Monitor
-Documentation=https://github.com/w1-defense/fortress
+Description=W1™ Aerospace AI Defense Fortress Daemon & Reverse Proxy
+Documentation=https://github.com/mohammedouassimbentebba-collab/Aegis-W1
 After=network.target local-fs.target
 Requires=local-fs.target
 
 [Service]
 Type=simple
-User=root
+# OPS-16: Principle of least privilege — run under dedicated non-root service account
+User=w1defense
+Group=w1defense
 WorkingDirectory=/opt/w1_defense
-ExecStartPre=/usr/bin/test -c /dev/w1_vhf_radar
-ExecStart=/usr/bin/node src/index.js --production
-Restart=always
+EnvironmentFile=-/etc/w1_defense/w1.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=15s
 
-# Aerospace DO-178C Level A Security Isolation & Hardening
+# Security Isolation & Hardening (No CAP_SYS_RAWIO, strict device isolation)
 ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
 ProtectControlGroups=true
 PrivateTmp=true
-PrivateDevices=false
-DeviceAllow=/dev/w1_vhf_radar rw
+PrivateDevices=true
 NoNewPrivileges=true
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_RAWIO
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=
 
 # cgroups v2 resource ceilings enforced by systemd
 CPUQuota=80%

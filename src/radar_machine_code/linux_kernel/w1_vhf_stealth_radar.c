@@ -24,6 +24,7 @@
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
+#include <linux/capability.h>
 
 #include "w1_radar_ioctl.h"
 
@@ -31,6 +32,9 @@
 #define CLASS_NAME  "w1_radar"
 #define DMA_BUFFER_SIZE (1024 * 1024 * 4) /* 4 MB Coherent DMA Ring Buffer */
 #define MAX_ACTIVE_TRACKS 32
+#define W1_MIN_PRF_HZ 1U
+#define W1_MAX_PRF_HZ 10000U
+#define W1_MAX_ANTENNA_ELEMENTS 4096U
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("W1™ Cognitive Defense Fortress Engineering Directorate");
@@ -95,95 +99,162 @@ static int w1_radar_open(struct inode *inodep, struct file *filep)
     return 0;
 }
 
-/* File Operations: Release */
+/* File Operations: Release (SYS-05: hrtimer_cancel MUST run outside spinlock) */
 static int w1_radar_release(struct inode *inodep, struct file *filep)
 {
     struct w1_radar_device *dev = filep->private_data;
     unsigned long flags;
+    bool was_sweeping = false;
+
+    if (!dev)
+        return 0;
 
     spin_lock_irqsave(&dev->lock, flags);
     if (dev->is_sweeping) {
         dev->is_sweeping = false;
-        hrtimer_cancel(&dev->prf_timer);
+        was_sweeping = true;
     }
     spin_unlock_irqrestore(&dev->lock, flags);
+
+    if (was_sweeping)
+        hrtimer_cancel(&dev->prf_timer);
 
     pr_info("%s: Device closed\n", DRIVER_NAME);
     return 0;
 }
 
-/* File Operations: IOCTL Dispatcher */
+/* File Operations: IOCTL Dispatcher (SYS-05 hardened: CAP_SYS_ADMIN, PRF bounds, no sleeping/hrtimer_cancel under spinlock) */
 static long w1_radar_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 {
     struct w1_radar_device *dev = filep->private_data;
     unsigned long flags;
     int ret = 0;
 
+    if (!dev)
+        return -ENODEV;
+
     switch (cmd) {
     case W1_RADAR_IOCTL_SET_CONFIG: {
         struct w1_radar_config cfg;
-        if (copy_from_user(&cfg, (void __user *)arg, sizeof(cfg))) {
+        uint64_t period_ns;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
+        if (copy_from_user(&cfg, (void __user *)arg, sizeof(cfg)))
             return -EFAULT;
+
+        /* Strict bounds validation to prevent divide-by-zero and IRQ storm DoS */
+        if (cfg.pulse_repetition_freq_hz < W1_MIN_PRF_HZ ||
+            cfg.pulse_repetition_freq_hz > W1_MAX_PRF_HZ) {
+            return -EINVAL;
         }
+        if (cfg.antenna_elements == 0 || cfg.antenna_elements > W1_MAX_ANTENNA_ELEMENTS) {
+            return -EINVAL;
+        }
+        if (cfg.frequency_band != W1_BAND_VHF_METRIC &&
+            cfg.frequency_band != W1_BAND_UHF_DECIMETRIC &&
+            cfg.frequency_band != W1_BAND_X_CENTIMETRIC) {
+            return -EINVAL;
+        }
+
+        period_ns = 1000000000ULL / cfg.pulse_repetition_freq_hz;
+
         spin_lock_irqsave(&dev->lock, flags);
         dev->current_config = cfg;
-        /* Update PRF period: Period = 1,000,000,000 ns / PRF_hz */
-        if (cfg.pulse_repetition_freq_hz > 0) {
-            uint64_t period_ns = 1000000000ULL / cfg.pulse_repetition_freq_hz;
-            dev->prf_period = ktime_set(0, period_ns);
-        }
+        dev->prf_period = ktime_set(0, period_ns);
         spin_unlock_irqrestore(&dev->lock, flags);
+
         pr_info("%s: Configured band 0x%02X, carrier %u Hz, PRF %u Hz\n",
                 DRIVER_NAME, cfg.frequency_band, cfg.carrier_freq_hz, cfg.pulse_repetition_freq_hz);
         break;
     }
 
     case W1_RADAR_IOCTL_GET_CONFIG: {
+        struct w1_radar_config cfg_copy;
+
+        /* Zero-init stack snapshot before locking to prevent kernel padding info leaks */
+        memset(&cfg_copy, 0, sizeof(cfg_copy));
         spin_lock_irqsave(&dev->lock, flags);
-        if (copy_to_user((void __user *)arg, &dev->current_config, sizeof(dev->current_config))) {
-            ret = -EFAULT;
-        }
+        cfg_copy = dev->current_config;
         spin_unlock_irqrestore(&dev->lock, flags);
+
+        if (copy_to_user((void __user *)arg, &cfg_copy, sizeof(cfg_copy)))
+            ret = -EFAULT;
         break;
     }
 
     case W1_RADAR_IOCTL_START_SWEEP: {
+        ktime_t period_copy;
+        bool should_start = false;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
         spin_lock_irqsave(&dev->lock, flags);
         if (!dev->is_sweeping) {
             dev->is_sweeping = true;
-            hrtimer_start(&dev->prf_timer, dev->prf_period, HRTIMER_MODE_REL);
+            period_copy = dev->prf_period;
+            should_start = true;
         }
         spin_unlock_irqrestore(&dev->lock, flags);
+
+        if (should_start)
+            hrtimer_start(&dev->prf_timer, period_copy, HRTIMER_MODE_REL);
+
         pr_info("%s: Radar sweep initiated\n", DRIVER_NAME);
         break;
     }
 
     case W1_RADAR_IOCTL_STOP_SWEEP: {
+        bool was_sweeping = false;
+
+        if (!capable(CAP_SYS_ADMIN))
+            return -EPERM;
+
         spin_lock_irqsave(&dev->lock, flags);
         if (dev->is_sweeping) {
             dev->is_sweeping = false;
-            hrtimer_cancel(&dev->prf_timer);
+            was_sweeping = true;
         }
         spin_unlock_irqrestore(&dev->lock, flags);
+
+        if (was_sweeping)
+            hrtimer_cancel(&dev->prf_timer);
+
         pr_info("%s: Radar sweep halted\n", DRIVER_NAME);
         break;
     }
 
     case W1_RADAR_IOCTL_READ_TRACKS: {
+        struct w1_radar_target_track *tracks_copy;
+
+        tracks_copy = kzalloc(sizeof(dev->tracks), GFP_KERNEL);
+        if (!tracks_copy)
+            return -ENOMEM;
+
         spin_lock_irqsave(&dev->lock, flags);
-        if (copy_to_user((void __user *)arg, dev->tracks, sizeof(dev->tracks))) {
-            ret = -EFAULT;
-        }
+        memcpy(tracks_copy, dev->tracks, sizeof(dev->tracks));
         spin_unlock_irqrestore(&dev->lock, flags);
+
+        if (copy_to_user((void __user *)arg, tracks_copy, sizeof(dev->tracks)))
+            ret = -EFAULT;
+
+        kfree(tracks_copy);
         break;
     }
 
     case W1_RADAR_IOCTL_GET_TELEMETRY: {
+        struct w1_radar_telemetry tel_copy;
+
+        /* Zero-init stack snapshot before locking to prevent kernel padding info leaks */
+        memset(&tel_copy, 0, sizeof(tel_copy));
         spin_lock_irqsave(&dev->lock, flags);
-        if (copy_to_user((void __user *)arg, &dev->telemetry, sizeof(dev->telemetry))) {
-            ret = -EFAULT;
-        }
+        tel_copy = dev->telemetry;
         spin_unlock_irqrestore(&dev->lock, flags);
+
+        if (copy_to_user((void __user *)arg, &tel_copy, sizeof(tel_copy)))
+            ret = -EFAULT;
         break;
     }
 
@@ -263,15 +334,17 @@ static int __init w1_radar_init(void)
 
 static void __exit w1_radar_exit(void)
 {
-    if (radar_ctx) {
-        hrtimer_cancel(&radar_ctx->prf_timer);
-        kfree(radar_ctx);
-    }
-
     device_destroy(w1_class, dev_num);
     class_destroy(w1_class);
     cdev_del(&w1_cdev);
     unregister_chrdev_region(dev_num, 1);
+
+    if (radar_ctx) {
+        radar_ctx->is_sweeping = false;
+        hrtimer_cancel(&radar_ctx->prf_timer);
+        kfree(radar_ctx);
+        radar_ctx = NULL;
+    }
 
     pr_info("%s: Driver Unloaded\n", DRIVER_NAME);
 }

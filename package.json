@@ -18,7 +18,7 @@
     "bench-linux": "node simulation/linux_kernel_sandbox_benchmark.js",
     "bench-android": "node simulation/android_mobile_sandbox_benchmark.js",
     "audit-cyber": "node simulation/comprehensive_cybersecurity_audit.js",
-    "start": "node src/index.js"
+    "start": "node src/server.js"
   },
   "keywords": [
     "ai-safety",

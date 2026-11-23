@@ -20,11 +20,13 @@ import { EarlyWarningRadar } from '../defense_grid/early_warning_radar.js';
 import { ElectronicWarfareOfficer } from '../defense_grid/electronic_warfare.js';
 import { HoneypotDecoySystem } from '../perimeter/honeypot_decoy_system.js';
 import { QuarantineEnclave } from '../forensics/quarantine_enclave.js';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { ByzantineCounterIntel } from '../defense_grid/byzantine_counter_intel.js';
 import { CapabilityTokenManager } from '../perimeter/capability_token_manager.js';
 import { OSFirewallShield } from '../perimeter/os_firewall_shield.js';
 import { WarningBroadcastSystem } from './warning_broadcast_system.js';
+import { NucleiTemplateEngine, Severity } from '../vulnerability_scanner/nuclei_template_engine.js';
+import { ZeroDayDetector, ZeroDayThreatLevel } from '../vulnerability_scanner/zero_day_detector.js';
 
 export class FortressCommander {
   constructor(initialState = {}, options = {}) {
@@ -42,9 +44,56 @@ export class FortressCommander {
     this.electronicWarfare = new ElectronicWarfareOfficer(options.ewOptions);
     this.honeypot = new HoneypotDecoySystem();
     this.quarantineEnclave = new QuarantineEnclave();
+    // ARCH-15: Integrate Nuclei declarative policy scanner and Zero-Day detector into main pipeline
+    this.nucleiScanner = options.nucleiScanner || new NucleiTemplateEngine(options.nucleiOptions);
+    this.zeroDayDetector = options.zeroDayDetector || new ZeroDayDetector(options.zeroDayOptions);
+    this.securityAuditLog = [];
+    this.maxSecurityAuditLogSize = options.maxSecurityAuditLogSize || 5000;
+    this.onSecurityAuditEvent = typeof options.onSecurityAuditEvent === 'function' ? options.onSecurityAuditEvent : null;
 
     // Register Air Defense with Kernel for automated interception
     this.kernel.registerInterceptor(this.airDefense);
+  }
+
+  /**
+   * Emits a structured SOC/SIEM security audit event with SHA-256 content
+   * fingerprint and zero raw sensitive payload leakage.
+   */
+  emitSecurityAuditEvent({
+    layer,
+    agentId,
+    threatType,
+    payload = '',
+    action = 'BLOCK',
+    correlationId = null
+  }) {
+    let serialized = '';
+    try {
+      serialized = typeof payload === 'string' ? payload : JSON.stringify(payload ?? '');
+    } catch {
+      serialized = '[UNSERIALIZABLE_CIRCULAR_OR_DEEP_PAYLOAD]';
+    }
+    const payloadSha256 = createHash('sha256').update(serialized).digest('hex');
+
+    const event = {
+      timestamp: new Date().toISOString(),
+      correlationId: correlationId || randomUUID(),
+      layer,
+      agentId,
+      threatType,
+      action,
+      payloadSha256
+    };
+
+    if (this.securityAuditLog.length >= this.maxSecurityAuditLogSize) {
+      this.securityAuditLog.shift();
+    }
+    this.securityAuditLog.push(event);
+
+    if (this.onSecurityAuditEvent) {
+      this.onSecurityAuditEvent(event);
+    }
+    return event;
   }
 
   registerFriendlyAgent(agentId, policyScope = ['*']) {
@@ -72,7 +121,9 @@ export class FortressCommander {
     isHighImpactAction = false
   }) {
     const pipelineStartTime = performance.now();
+    const correlationId = randomUUID();
     const defenseAudit = {
+      correlationId,
       agentId,
       stagesPassed: [],
       intercepted: false,
@@ -179,6 +230,87 @@ export class FortressCommander {
         };
       }
       defenseAudit.stagesPassed.push('RADAR_ISR_CLEAR');
+
+      // =========================================================================
+      // LAYER 1.5: Declarative Nuclei Policy Scan & Zero-Day Anomaly Check (ARCH-15)
+      // =========================================================================
+      const nucleiPromptScan = this.nucleiScanner.scan(
+        { payload: userPrompt },
+        { severities: [Severity.CRITICAL, Severity.HIGH] }
+      );
+      if (nucleiPromptScan.vulnerabilitiesFound > 0) {
+        const topMatch = nucleiPromptScan.matches[0];
+        const reason = `[NUCLEI_POLICY_SCANNER] Matched '${topMatch.templateId}' (${topMatch.severity}, CVSS ${topMatch.cvssScore}): ${topMatch.name}`;
+        defenseAudit.intercepted = true;
+        defenseAudit.interceptionStage = 'NUCLEI_POLICY_SCANNER';
+        defenseAudit.reason = reason;
+
+        this.warningSystem.dispatchWarning({ agentId, level: 'RED', threatDetail: reason });
+        const quarantined = topMatch.severity === Severity.CRITICAL;
+        if (quarantined) {
+          this.kernel.quarantineAgent(agentId, reason);
+          this.kernel.setDefenseCondition(DefenseCondition.DEFCON_2);
+        }
+
+        const securityAuditEvent = this.emitSecurityAuditEvent({
+          layer: 'LAYER_1_5_NUCLEI_PROMPT',
+          agentId,
+          threatType: topMatch.templateId,
+          payload: userPrompt,
+          action: quarantined ? 'QUARANTINE_AND_BLOCK' : 'BLOCK',
+          correlationId
+        });
+
+        return {
+          success: false,
+          blocked: true,
+          interceptionStage: 'NUCLEI_POLICY_SCANNER',
+          reason,
+          nucleiMatches: nucleiPromptScan.matches,
+          securityAuditEvent,
+          latencyMs: performance.now() - pipelineStartTime
+        };
+      }
+      defenseAudit.stagesPassed.push('NUCLEI_PROMPT_CLEAR');
+
+      const zeroDayPromptScan = this.zeroDayDetector.inspect({
+        agentId,
+        payload: userPrompt,
+        actionType: actionProposal?.toolName || actionProposal?.actionType || 'PROMPT_INGRESS'
+      });
+      if (
+        zeroDayPromptScan.threatLevel === ZeroDayThreatLevel.CONFIRMED_ZERO_DAY ||
+        zeroDayPromptScan.threatLevel === ZeroDayThreatLevel.PROBABLE_ZERO_DAY
+      ) {
+        const reason = `[ZERO_DAY_DETECTOR] ${zeroDayPromptScan.threatLevel} (confidence=${zeroDayPromptScan.confidence.toFixed(2)}): ${zeroDayPromptScan.reasoning}`;
+        defenseAudit.intercepted = true;
+        defenseAudit.interceptionStage = 'ZERO_DAY_DETECTOR';
+        defenseAudit.reason = reason;
+
+        this.warningSystem.dispatchWarning({ agentId, level: 'RED', threatDetail: reason });
+        this.kernel.quarantineAgent(agentId, reason);
+        this.kernel.setDefenseCondition(DefenseCondition.DEFCON_2);
+
+        const securityAuditEvent = this.emitSecurityAuditEvent({
+          layer: 'LAYER_1_5_ZERODAY_PROMPT',
+          agentId,
+          threatType: zeroDayPromptScan.anomalies[0]?.type || zeroDayPromptScan.threatLevel,
+          payload: userPrompt,
+          action: 'QUARANTINE_AND_BLOCK',
+          correlationId
+        });
+
+        return {
+          success: false,
+          blocked: true,
+          interceptionStage: 'ZERO_DAY_DETECTOR',
+          reason,
+          zeroDayAssessment: zeroDayPromptScan,
+          securityAuditEvent,
+          latencyMs: performance.now() - pipelineStartTime
+        };
+      }
+      defenseAudit.stagesPassed.push('ZERODAY_PROMPT_CLEAR');
     }
 
     // =========================================================================
@@ -350,6 +482,83 @@ export class FortressCommander {
         };
       }
       defenseAudit.stagesPassed.push('OS_FIREWALL_NET_CLEAR');
+    }
+
+    // =========================================================================
+    // LAYER 4.5: Action Proposal Nuclei & Zero-Day Inspection (ARCH-15)
+    // =========================================================================
+    if (actionProposal.parameters) {
+      // Run ZeroDay structural & heuristic scan FIRST so circular/deep DoS payloads fail-closed
+      // before JSON serialization inside regex-based template scanners.
+      const zeroDayParamScan = this.zeroDayDetector.inspect({
+        agentId,
+        actionType: actionProposal.toolName || actionProposal.actionType || '',
+        parameters: actionProposal.parameters
+      });
+      if (
+        zeroDayParamScan.threatLevel === ZeroDayThreatLevel.CONFIRMED_ZERO_DAY ||
+        zeroDayParamScan.threatLevel === ZeroDayThreatLevel.PROBABLE_ZERO_DAY
+      ) {
+        const reason = `[ZERO_DAY_DETECTOR] ${zeroDayParamScan.threatLevel} in action parameters (confidence=${zeroDayParamScan.confidence.toFixed(2)}): ${zeroDayParamScan.reasoning}`;
+        defenseAudit.intercepted = true;
+        defenseAudit.interceptionStage = 'ZERO_DAY_DETECTOR';
+        defenseAudit.reason = reason;
+
+        this.warningSystem.dispatchWarning({ agentId, level: 'RED', threatDetail: reason });
+        this.kernel.quarantineAgent(agentId, reason);
+        const securityAuditEvent = this.emitSecurityAuditEvent({
+          layer: 'LAYER_4_5_ZERODAY_ACTION',
+          agentId,
+          threatType: zeroDayParamScan.anomalies[0]?.type || zeroDayParamScan.threatLevel,
+          payload: actionProposal.parameters,
+          action: 'QUARANTINE_AND_BLOCK',
+          correlationId
+        });
+
+        return {
+          success: false,
+          blocked: true,
+          interceptionStage: 'ZERO_DAY_DETECTOR',
+          reason,
+          zeroDayAssessment: zeroDayParamScan,
+          securityAuditEvent,
+          latencyMs: performance.now() - pipelineStartTime
+        };
+      }
+
+      const nucleiParamScan = this.nucleiScanner.scan(
+        { payload: actionProposal.parameters },
+        { severities: [Severity.CRITICAL, Severity.HIGH] }
+      );
+      if (nucleiParamScan.vulnerabilitiesFound > 0) {
+        const topMatch = nucleiParamScan.matches[0];
+        const reason = `[NUCLEI_POLICY_SCANNER] Hostile action parameters matched '${topMatch.templateId}' (${topMatch.severity}): ${topMatch.name}`;
+        defenseAudit.intercepted = true;
+        defenseAudit.interceptionStage = 'NUCLEI_POLICY_SCANNER';
+        defenseAudit.reason = reason;
+
+        this.warningSystem.dispatchWarning({ agentId, level: 'RED', threatDetail: reason });
+        this.kernel.quarantineAgent(agentId, reason);
+        const securityAuditEvent = this.emitSecurityAuditEvent({
+          layer: 'LAYER_4_5_NUCLEI_ACTION',
+          agentId,
+          threatType: topMatch.templateId,
+          payload: actionProposal.parameters,
+          action: 'QUARANTINE_AND_BLOCK',
+          correlationId
+        });
+
+        return {
+          success: false,
+          blocked: true,
+          interceptionStage: 'NUCLEI_POLICY_SCANNER',
+          reason,
+          nucleiMatches: nucleiParamScan.matches,
+          securityAuditEvent,
+          latencyMs: performance.now() - pipelineStartTime
+        };
+      }
+      defenseAudit.stagesPassed.push('ACTION_SCANNER_CLEAR');
     }
 
     // =========================================================================
