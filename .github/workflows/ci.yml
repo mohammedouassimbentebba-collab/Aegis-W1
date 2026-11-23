@@ -3,6 +3,7 @@ name: W1 Safety Fortress CI
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
 
@@ -17,10 +18,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Run full defense & security test suite
         run: npm test
@@ -32,19 +33,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install kernel headers, build toolchain, and systemd
         run: |
           sudo apt-get update
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential systemd kmod
+          sudo apt-get install -y build-essential systemd kmod
+          if ! sudo apt-get install -y "linux-headers-$(uname -r)"; then
+            sudo apt-get install -y linux-headers-generic
+          fi
 
       - name: Build Ring-0 VHF/UHF Radar Kernel Module (Kbuild -Werror)
         run: |
           KDIR="/lib/modules/$(uname -r)/build"
+          if [ ! -d "$KDIR" ]; then
+            KDIR=$(ls -d /lib/modules/*/build /usr/src/linux-headers-* 2>/dev/null | head -n 1 || true)
+          fi
+          test -n "$KDIR" && test -d "$KDIR"
+          echo "Resolved KDIR=$KDIR (running kernel: $(uname -r))"
           MOD_DIR="$GITHUB_WORKSPACE/src/radar_machine_code/linux_kernel"
           make -C "$KDIR" M="$MOD_DIR" KCFLAGS="-Werror" modules
           test -f "$MOD_DIR/w1_vhf_radar.ko"
@@ -54,11 +63,16 @@ jobs:
       - name: Verify hardened non-root systemd unit
         run: |
           id -u w1defense >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin w1defense
+          NODE_BIN="$(command -v node)"
           sudo ln -sfn "$GITHUB_WORKSPACE" /opt/w1_defense
           if [ ! -e /usr/bin/node ]; then
-            sudo ln -s "$(command -v node)" /usr/bin/node
+            sudo ln -sfn "$NODE_BIN" /usr/bin/node
           fi
-          systemd-analyze verify "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
+          sed \
+            -e "s|^WorkingDirectory=.*|WorkingDirectory=$GITHUB_WORKSPACE|" \
+            -e "s|^ExecStart=/usr/bin/node|ExecStart=$NODE_BIN|" \
+            "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service" > /tmp/w1-defense.service
+          systemd-analyze verify /tmp/w1-defense.service
           grep -Eq '^User=w1defense$' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
           grep -Eq '^PrivateDevices=true$' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"
           ! grep -E '^[^#]*CAP_SYS_RAWIO' "$GITHUB_WORKSPACE/src/linux_os/w1-defense.service"

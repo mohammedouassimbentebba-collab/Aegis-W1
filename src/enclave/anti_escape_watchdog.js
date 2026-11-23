@@ -230,7 +230,7 @@ export class AntiEscapeWatchdog {
             return {
               contained: false,
               violationType: 'SYMLINK_JAILBREAK_ATTEMPT',
-              reason: `Physical boundary violation: Symlink '${targetPath}' points outside the assigned work tent ('${linkResolved}').`,
+              reason: `Physical boundary violation: Symlink dereferences outside tent root ('${targetPath}' -> '${linkResolved}').`,
               threat
             };
           }

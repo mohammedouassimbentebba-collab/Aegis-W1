@@ -25,6 +25,9 @@
 #include <linux/ktime.h>
 #include <linux/spinlock.h>
 #include <linux/capability.h>
+#include <linux/sched.h>
+#include <linux/string.h>
+#include <linux/version.h>
 
 #include "w1_radar_ioctl.h"
 
@@ -96,6 +99,7 @@ static enum hrtimer_restart w1_prf_timer_callback(struct hrtimer *timer)
 /* File Operations: Open */
 static int w1_radar_open(struct inode *inodep, struct file *filep)
 {
+    (void)inodep;
     filep->private_data = radar_ctx;
     pr_info("%s: Device opened by PID %d\n", DRIVER_NAME, current->pid);
     return 0;
@@ -108,6 +112,7 @@ static int w1_radar_release(struct inode *inodep, struct file *filep)
     unsigned long flags;
     bool was_sweeping = false;
 
+    (void)inodep;
     if (!dev)
         return 0;
 
@@ -301,8 +306,12 @@ static int __init w1_radar_init(void)
     }
 
     radar_ctx->prf_period = ktime_set(0, 1000000); /* 1 ms = 1000 Hz PRF */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+    hrtimer_setup(&radar_ctx->prf_timer, w1_prf_timer_callback, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+#else
     hrtimer_init(&radar_ctx->prf_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     radar_ctx->prf_timer.function = w1_prf_timer_callback;
+#endif
 
     /* Register Character Device */
     ret = alloc_chrdev_region(&dev_num, 0, 1, DRIVER_NAME);
@@ -319,7 +328,11 @@ static int __init w1_radar_init(void)
         return ret;
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
     w1_class = class_create(CLASS_NAME);
+#else
+    w1_class = class_create(THIS_MODULE, CLASS_NAME);
+#endif
     if (IS_ERR(w1_class)) {
         cdev_del(&w1_cdev);
         unregister_chrdev_region(dev_num, 1);
