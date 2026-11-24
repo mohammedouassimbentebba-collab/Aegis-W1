@@ -59,6 +59,7 @@ export class DeterministicKernel {
     this.auditLog = [];
     this.quarantinedAgents = new Set();
     this.interceptors = new Set();
+    this.stateStore = options.stateStore || null;
   }
 
   registerInterceptor(interceptor) {
@@ -77,11 +78,14 @@ export class DeterministicKernel {
   }
 
   isAgentQuarantined(agentId) {
-    return this.quarantinedAgents.has(agentId);
+    return this.quarantinedAgents.has(agentId) || Boolean(this.stateStore?.isAgentQuarantinedSync(agentId));
   }
 
   quarantineAgent(agentId, reason) {
     this.quarantinedAgents.add(agentId);
+    if (this.stateStore) {
+      this.stateStore.quarantineAgentSync(agentId, reason);
+    }
     this.logEvent({
       type: 'AGENT_QUARANTINED',
       agentId,

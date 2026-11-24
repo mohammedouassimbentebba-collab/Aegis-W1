@@ -30,6 +30,10 @@ npm-debug.log*
 yarn-debug.log*
 .tmp/
 temp_*/
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # OS Specific
 .DS_Store

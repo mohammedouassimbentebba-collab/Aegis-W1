@@ -24,6 +24,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import { PayloadCanonicalizer } from './payload_canonicalizer.js';
 
 /** Maximum request body size in bytes (2 MB). */
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -69,6 +70,8 @@ export class LiveAIFirewallProxy {
     this.maxRateLimitEntries = options.maxRateLimitEntries || MAX_RATE_LIMIT_ENTRIES;
     this.maxLogEntries = options.maxLogEntries || MAX_LOG_ENTRIES;
     this.probeHandler = typeof options.probeHandler === 'function' ? options.probeHandler : null;
+    this.canonicalizer = options.canonicalizer || new PayloadCanonicalizer(options.canonicalizerOptions);
+    this.stateStore = options.stateStore || null;
     this.server = null;
     this.interceptedRequestsLog = [];
 
@@ -221,13 +224,36 @@ export class LiveAIFirewallProxy {
     const body = await this._readLimitedJsonBody(req);
 
     const agentId = req.headers['x-agent-id'] || 'anonymous_client';
+    const sessionId = req.headers['x-session-id'] || clientKey || 'default';
 
-    const userPrompt = this.extractPromptFromBody(body);
+    const rawPrompt = this.extractPromptFromBody(body);
+    const canon = rawPrompt ? this.canonicalizer.canonicalize(rawPrompt) : null;
+
+    if (canon && canon.evasionDetected) {
+      this._appendLog({
+        timestamp: Date.now(),
+        agentId,
+        path: req.url,
+        status: 'BLOCKED',
+        reason: `PAYLOAD_OBFUSCATION_EVASION: ${canon.evasionReasons.join(', ')}`
+      });
+      res.writeHead(403, {
+        'Content-Type': 'application/json',
+        'X-W1-Defense-Interception': 'TRUE',
+        'X-W1-Interception-Stage': 'PAYLOAD_OBFUSCATION_EVASION'
+      });
+      return res.end(JSON.stringify({
+        status: 'INTERCEPTED_BY_DEFENSE_DOME',
+        interceptionStage: 'PAYLOAD_OBFUSCATION_EVASION',
+        reason: `[PAYLOAD_CANONICALIZER] Intentional obfuscation detected: ${canon.evasionReasons.join(', ')}`
+      }));
+    }
 
     // Evaluate through Fortress Commander Multi-Domain Grid
     const mission = await this.commander.processAgentMission({
       agentId,
-      userPrompt,
+      sessionId,
+      userPrompt: rawPrompt,
       internalScratchpad: body.scratchpad || '',
       actionProposal: body.actionProposal || null
     });
@@ -267,6 +293,31 @@ export class LiveAIFirewallProxy {
       // PRODUCTION MODE: Forward certified traffic to upstream LLM (http or https)
       try {
         const upstreamResponse = await this._forwardToUpstream(body, req.headers);
+
+        // Layer 5: Sanitize upstream/tool output before returning to caller context
+        if (this.commander && typeof this.commander.inspectToolOutput === 'function') {
+          const outCheck = this.commander.inspectToolOutput(agentId, 'upstream_llm_response', upstreamResponse);
+          if (!outCheck.safe) {
+            this._appendLog({
+              timestamp: Date.now(),
+              agentId,
+              path: req.url,
+              status: 'BLOCKED_UPSTREAM_OUTPUT',
+              reason: outCheck.reason
+            });
+            res.writeHead(403, {
+              'Content-Type': 'application/json',
+              'X-W1-Defense-Interception': 'TRUE',
+              'X-W1-Interception-Stage': outCheck.interceptionStage
+            });
+            return res.end(JSON.stringify({
+              status: 'INTERCEPTED_BY_DEFENSE_DOME',
+              interceptionStage: outCheck.interceptionStage,
+              threatType: outCheck.threatType,
+              reason: outCheck.reason
+            }));
+          }
+        }
 
         res.writeHead(200, {
           'Content-Type': 'application/json',
@@ -532,6 +583,10 @@ export class LiveAIFirewallProxy {
    * @returns {{ allowed: boolean, reason?: string }}
    */
   _checkRateLimit(clientKey) {
+    if (this.stateStore && typeof this.stateStore.checkRateLimitSync === 'function') {
+      return this.stateStore.checkRateLimitSync(clientKey, this.rateLimitMax, this.rateLimitWindowMs);
+    }
+
     const now = Date.now();
 
     // Periodic pruning (at most once per second, or immediately when at capacity)

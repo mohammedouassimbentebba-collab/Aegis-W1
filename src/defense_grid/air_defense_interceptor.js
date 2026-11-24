@@ -29,6 +29,7 @@ export class AirDefenseInterceptor {
     this.maxIffNonces = options.maxIffNonces || 10000;
     this.lastIffPruneAt = Date.now();
     this.watchdogTimeoutMs = options.watchdogTimeoutMs || 5.0;
+    this.stateStore = options.stateStore || null;
   }
 
   /**
@@ -110,12 +111,26 @@ export class AirDefenseInterceptor {
     this._pruneIffNonces(now);
 
     const nonceKey = `${agentId}:${iffProof.nonce}:${iffProof.issuedAt}`;
-    if (this.usedIffNonces.has(nonceKey)) {
+    if (this.usedIffNonces.has(nonceKey) || this.stateStore?.isNonceConsumedSync(`iff:${nonceKey}`)) {
       return {
         isFriend: false,
         status: 'IFF_REPLAY_DETECTED',
         reason: `Cryptographic IFF nonce replay detected for Agent '${agentId}': Hostile radar spoofing attempt!`
       };
+    }
+
+    const expiresAt = iffProof.issuedAt + this.iffProofTtlMs;
+    if (this.stateStore) {
+      const persistRes = this.stateStore.consumeNonceSync(`iff:${nonceKey}`, expiresAt, now);
+      if (!persistRes.consumed) {
+        return {
+          isFriend: false,
+          status: persistRes.alreadyUsed ? 'IFF_REPLAY_DETECTED' : 'IFF_NONCE_CACHE_SATURATED',
+          reason: persistRes.alreadyUsed
+            ? `Cryptographic IFF nonce replay detected for Agent '${agentId}': Hostile radar spoofing attempt!`
+            : (persistRes.reason || 'Durable IFF nonce store saturated (fail-closed)')
+        };
+      }
     }
 
     // Fail-closed backpressure: never evict a live nonce to make room.
@@ -127,7 +142,7 @@ export class AirDefenseInterceptor {
       };
     }
 
-    this.usedIffNonces.set(nonceKey, iffProof.issuedAt + this.iffProofTtlMs);
+    this.usedIffNonces.set(nonceKey, expiresAt);
     return { isFriend: true, status: 'IFF_STATUS_FRIEND' };
   }
 

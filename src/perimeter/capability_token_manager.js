@@ -51,6 +51,7 @@ export class CapabilityTokenManager {
     this.consumedTokens = new Map();
 
     this.maxConsumedEntries = options.maxConsumedEntries || MAX_CONSUMED_ENTRIES;
+    this.stateStore = options.stateStore || null;
 
     this.enforceSingleUseByDefault = options.enforceSingleUse !== undefined
       ? options.enforceSingleUse
@@ -155,8 +156,8 @@ export class CapabilityTokenManager {
       return { valid: false, reason: 'Capability token has been revoked by military command' };
     }
 
-    // 4. Check single-use consumption (replay prevention)
-    if (this.consumedTokens.has(token.tokenId)) {
+    // 4. Check single-use consumption (replay prevention across memory + durable store)
+    if (this.consumedTokens.has(token.tokenId) || this.stateStore?.isNonceConsumedSync(`tok:${token.tokenId}`)) {
       return { valid: false, reason: 'Capability token already consumed (single-use nonce exhausted)' };
     }
 
@@ -172,6 +173,17 @@ export class CapabilityTokenManager {
     // 6. Mark token as consumed if single-use (SEC-11: never evict live nonces; fail-closed backpressure)
     const shouldConsume = consume && (token.singleUse !== false);
     if (shouldConsume) {
+      if (this.stateStore) {
+        const persistRes = this.stateStore.consumeNonceSync(`tok:${token.tokenId}`, token.expiresAt);
+        if (!persistRes.consumed) {
+          return {
+            valid: false,
+            reason: persistRes.alreadyUsed
+              ? 'Capability token already consumed (single-use nonce exhausted)'
+              : (persistRes.reason || 'Durable nonce persistence failed (fail-closed)')
+          };
+        }
+      }
       if (this.consumedTokens.size >= this.maxConsumedEntries) {
         this._pruneExpiredConsumed();
       }
@@ -213,7 +225,7 @@ export class CapabilityTokenManager {
   }
 
   isConsumed(tokenId) {
-    return this.consumedTokens.has(tokenId);
+    return this.consumedTokens.has(tokenId) || Boolean(this.stateStore?.isNonceConsumedSync(`tok:${tokenId}`));
   }
 
   /**

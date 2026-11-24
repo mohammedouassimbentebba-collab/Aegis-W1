@@ -21,6 +21,7 @@ import { LiveAIFirewallProxy } from './perimeter/live_firewall_proxy.js';
 import { HermeticWorkTent } from './enclave/hermetic_work_tent.js';
 import { ContainerIsolationEngine } from './ai_testbed/container_isolation_engine.js';
 import { SiemExporter } from './audit/siem_exporter.js';
+import { DefenseStateStore } from './state/defense_state_store.js';
 
 function computeShannonEntropy(str) {
   if (!str || str.length === 0) return 0;
@@ -160,6 +161,11 @@ export async function startDefenseServer(options = {}) {
       : null
   );
 
+  const stateDbPath = options.stateDbPath !== undefined
+    ? options.stateDbPath
+    : (process.env.W1_STATE_DB_PATH || ':memory:');
+  const stateStore = options.stateStore || new DefenseStateStore({ dbPath: stateDbPath });
+
   const isolationEngine = options.isolationEngine || new ContainerIsolationEngine();
   const isolationReadyPromise = options.deferRuntimeProbe
     ? Promise.resolve(isolationEngine.verifyHostRuntimePrerequisites())
@@ -167,6 +173,7 @@ export async function startDefenseServer(options = {}) {
 
   const commander = new FortressCommander({}, {
     tokenManager,
+    stateStore,
     airDefenseOptions: { iffSecretKey: effectiveIffSecret },
     siemExporter,
     onSecurityAuditEvent: options.onSecurityAuditEvent
@@ -222,6 +229,7 @@ export async function startDefenseServer(options = {}) {
     port: proxyPort,
     upstreamUrl,
     requestTimeoutMs,
+    stateStore,
     probeHandler
   });
 
@@ -244,7 +252,8 @@ export async function startDefenseServer(options = {}) {
     await Promise.allSettled([
       gateway.stop(),
       proxy.stop(),
-      siemExporter ? siemExporter.flush() : Promise.resolve()
+      siemExporter ? siemExporter.flush() : Promise.resolve(),
+      !options.stateStore && stateStore ? stateStore.close() : Promise.resolve()
     ]);
   };
 
@@ -263,6 +272,7 @@ export async function startDefenseServer(options = {}) {
     proxy,
     commander,
     tokenManager,
+    stateStore,
     isolationEngine,
     isolationReadyPromise,
     siemExporter,
